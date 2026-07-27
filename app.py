@@ -38,6 +38,7 @@ from gradpath.filters import filter_programs
 from gradpath.matching import (
     build_pi_outreach_urls,
     build_pi_peer_review_urls,
+    calculate_real_stipend,
     evaluate_pi_mentorship_flags,
     normalize_matching_profile,
     pi_hiring_signal,
@@ -831,6 +832,19 @@ def render_program_detail(program: dict[str, Any], row: dict[str, Any]) -> None:
         f"<span class='gp-muted'>Overall score {score}/100</span>",
         unsafe_allow_html=True,
     )
+    stipend_amount = program.get("stipend_amount", 0)
+    location = program.get("school", "")
+    if stipend_amount and stipend_amount > 0:
+        col_info = calculate_real_stipend(stipend_amount, location)
+        tier_class = {"Comfortable": "gp-strong", "Workable": "gp-good", "Tight": "gp-risk"}.get(
+            col_info["tier"], "gp-muted"
+        )
+        st.markdown(
+            f"<span class='gp-muted'>Stipend: ${stipend_amount:,} nominal → "
+            f"<strong class='{tier_class}'>${col_info['real_stipend']:,} real</strong> "
+            f"(COL ×{col_info['col_index']}, tier: {col_info['tier']})</span>",
+            unsafe_allow_html=True,
+        )
     m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("Research", row.get("Research Fit Score", 0))
     m2.metric("Evidence", row.get("Evidence Fit Score", 0))
@@ -1329,21 +1343,27 @@ def render_pi_browser_tab(programs: list[dict[str, Any]]) -> None:
                 st.markdown(f"**Research Focus**: {areas}")
             st.caption(f"Hiring Signal: {signal['reason']} | Mentorship Status: {mentorship['safety']}")
 
-            st.markdown("**Outreach & Grant Links:**")
-            l1, l2, l3, l4, l5, l6 = st.columns(6)
-            l1.markdown(f"[🔬 NSF Awards]({urls['nsf_awards']})")
-            l2.markdown(f"[🏥 NIH RePORTER]({urls['nih_reporter']})")
-            l3.markdown(f"[🎓 Google Scholar]({urls['google_scholar']})")
-            l4.markdown(f"[💼 LinkedIn]({urls['linkedin']})")
-            l5.markdown(f"[🐦 X / Twitter]({urls['x_twitter']})")
-            l6.markdown(f"[🌐 Lab Homepage]({urls['personal_homepage']})")
+            if mentorship["red_flags"]:
+                st.warning(f"🚩 **Red Flags Detected**: {', '.join(mentorship['red_flags'])}")
+            if mentorship["green_flags"]:
+                st.success(f"🟢 **Positive Signals**: {', '.join(mentorship['green_flags'])}")
 
-            st.markdown("**Peer Review & Advisor Safety Screening (Avoid Toxic PIs):**")
+            st.markdown("**🔬 Grant Intelligence & Outreach Links** (NSF / NIH / DARPA / Scholar / LinkedIn / X / Lab):")
+            l1, l2, l3, l4, l5, l6, l7 = st.columns(7)
+            l1.markdown(f"[🔬 NSF]({urls['nsf_awards']})")
+            l2.markdown(f"[🏥 NIH]({urls['nih_reporter']})")
+            l3.markdown(f"[⚡ DARPA]({urls['darpa_grants']})")
+            l4.markdown(f"[🎓 Scholar]({urls['google_scholar']})")
+            l5.markdown(f"[💼 LinkedIn]({urls['linkedin']})")
+            l6.markdown(f"[🐦 X/Twitter]({urls['x_twitter']})")
+            l7.markdown(f"[🌐 Lab Page]({urls['personal_homepage']})")
+
+            st.markdown("**🛡️ Peer Review & Advisor Safety Screening** (Avoid Toxic PIs):")
             r1, r2, r3, r4 = st.columns(4)
-            r1.markdown(f"[💬 RateMyProfessors]({review_urls['ratemyprofessors']})")
-            r2.markdown(f"[🗣️ Reddit Peer Feedback]({review_urls['reddit_peer_review']})")
-            r3.markdown(f"[⚖️ RateYourPI Search]({review_urls['rateyourpi']})")
-            r4.markdown(f"[🎓 Lab Alumni Placements]({review_urls['lab_alumni_placements']})")
+            r1.markdown(f"[💬 RateMyProf]({review_urls['ratemyprofessors']})")
+            r2.markdown(f"[🗣️ Reddit]({review_urls['reddit_peer_review']})")
+            r3.markdown(f"[⚖️ RateYourPI]({review_urls['rateyourpi']})")
+            r4.markdown(f"[🎓 Alumni Placements]({review_urls['lab_alumni_placements']})")
 
             note_input = st.text_area(
                 f"Grant Notes, Peer Review & Outreach Status for {prof_name}",
@@ -1484,6 +1504,90 @@ def render_outreach_tracker_tab(programs: list[dict[str, Any]]) -> None:
             st.text_input(f"SOP Customization Note for {school}", key=f"sop_note_{p_id}", placeholder="e.g. Focus on optimization & Ju Sun lab alignment.")
 
 
+_COL_CITIES = {
+    "Bay Area / Stanford / Palo Alto": 1.85,
+    "Boston / Cambridge / NYC / Columbia": 1.70,
+    "LA / Seattle / London": 1.50,
+    "Chicago / Zurich / Singapore / Toronto": 1.35,
+    "Champaign / West Lafayette / Madison": 1.05,
+    "Other / National Average": 1.15,
+}
+
+_STIPEND_TIER_COLOR = {"Comfortable": "🟢", "Workable": "🟡", "Tight": "🔴"}
+
+
+def render_stipend_calculator_tab(programs: list[dict[str, Any]]) -> None:
+    st.subheader("💰 Cost-of-Living (COL) Real Stipend Calculator")
+    st.caption(
+        "Compare nominal vs. real (purchasing-power-adjusted) stipends across programs. "
+        "A $40k stipend in Boston ≈ $23.5k real — less than a $30k stipend in the Midwest."
+    )
+
+    with st.expander("📐 Manual Stipend Calculator", expanded=True):
+        mc1, mc2, mc3 = st.columns(3)
+        with mc1:
+            manual_stipend = st.number_input(
+                "Nominal annual stipend ($)", min_value=0, max_value=120000, value=38000, step=500, key="calc_stipend"
+            )
+        with mc2:
+            city_label = st.selectbox("Location", list(_COL_CITIES.keys()), key="calc_city")
+        with mc3:
+            col_index = _COL_CITIES[city_label]
+            real_val = round(manual_stipend / col_index)
+            if real_val >= 32000:
+                tier = "Comfortable"
+            elif real_val >= 25000:
+                tier = "Workable"
+            else:
+                tier = "Tight"
+            emoji = _STIPEND_TIER_COLOR.get(tier, "")
+            st.metric(
+                f"Real Stipend {emoji} ({tier})",
+                f"${real_val:,}",
+                delta=f"COL ×{col_index}",
+                delta_color="off",
+            )
+
+    if not programs:
+        st.info("No active programs in current view. Run Agent Search to populate programs.")
+        return
+
+    rows = []
+    for prog in programs:
+        stipend = prog.get("stipend_amount", 0)
+        if not stipend or stipend <= 0:
+            continue
+        location = prog.get("school", "")
+        col_data = calculate_real_stipend(stipend, location)
+        tier_emoji = _STIPEND_TIER_COLOR.get(col_data["tier"], "⚪")
+        rows.append({
+            "University": prog.get("school", ""),
+            "Program": prog.get("program", ""),
+            "Degree": prog.get("degree", ""),
+            "Nominal Stipend ($)": stipend,
+            "COL Index": col_data["col_index"],
+            "Real Stipend ($)": col_data["real_stipend"],
+            "Tier": f"{tier_emoji} {col_data['tier']}",
+        })
+
+    if not rows:
+        st.info("No stipend data available for active programs. Programs need stipend_amount set.")
+        return
+
+    df_stip = pd.DataFrame(rows).sort_values("Real Stipend ($)", ascending=False)
+    st.write(f"Comparing **{len(df_stip)}** programs with stipend data:")
+    st.dataframe(df_stip, width="stretch", hide_index=True)
+
+    best = df_stip.iloc[0]
+    st.success(
+        f"🏆 Highest real stipend: **{best['University']} — {best['Program']}** "
+        f"(${best['Real Stipend ($)']:,} real / ${best['Nominal Stipend ($)']:,} nominal, "
+        f"COL ×{best['COL Index']}, {best['Tier']})"
+    )
+
+
+
+
 def render_guide_tab() -> None:
     st.subheader("Guide")
     st.markdown(
@@ -1497,28 +1601,52 @@ def render_guide_tab() -> None:
         python3 -m streamlit run app.py
         ```
 
-        **Workflow**
+        **Full Workflow (13 Tabs)**
 
-        1. Open **Profile Narrative** and review the default research story, evidence,
-           test strategy, and recommender contexts.
-        2. Open **Import Profile** if you update your CV. Upload `.tex`, `.pdf`, or `.txt`,
-           extract, review, then apply the draft.
-        3. Open **Agent Search** to discover official program pages and build match rows.
-        4. Use the sidebar filters to switch between MS, PhD, fields, regions, funding, and DDL.
-        5. Open **Match Board** for ranked results and **Program Detail** for route/risk evidence.
-        6. Open **Compare** to inspect 2-4 programs side by side.
-        7. Open **Export** to download the reference-shaped CSV or formatted XLSX workbook.
+        | Tab | Purpose |
+        |-----|---------|
+        | **Profile Narrative** | Set your research story, tags, GPA, TOEFL/GRE, funding prefs |
+        | **Import Profile** | Upload CV (PDF/TEX/TXT) or transcript to auto-fill profile |
+        | **Program Research** | AI Deep Search or manual URL extraction; seeded enrichment |
+        | **Admission Mode Audit** | Classify each program's intake mode (Direct-PI / Committee / Rotation / MS) |
+        | **PI Tracker** | Track faculty: NSF/NIH/DARPA grants, peer review links, per-PI notes |
+        | **Joint Evaluation & Portfolio** | 2-layer joint scoring + portfolio category + balance warnings |
+        | **Outreach & Tracker** | SOP customization notes and submission status per program |
+        | **COL Stipend Calculator** | Manual & batch COL-adjusted real stipend comparisons |
+        | **Guide** | This tab |
+        | **Match Board** | Dynamic weight slider ranker; filterable program table |
+        | **Program Detail** | Full evidence, risk notes, next fit plan, COL stipend |
+        | **Compare** | Side-by-side 2-4 program comparison |
+        | **Export** | Download CSV or XLSX with all matched programs |
+
+        **PI Safety Screening Checklist**
+
+        For every PI of interest:
+        1. Click **NSF Awards** → confirm recent active grants.
+        2. Click **DARPA** → check for federal defense/engineering projects.
+        3. Click **Reddit** peer feedback → search r/GradAdmissions + r/Academia.
+        4. Click **RateYourPI** → verify no red-flag patterns (dropout rate, overtime).
+        5. Click **Alumni Placements** → confirm PhD graduates reach good positions.
+        6. Add notes to the text area — badges auto-update 🔥 / 🚩 / 🟩.
+
+        **COL Stipend Tiers**
+
+        | Tier | Real Stipend | Meaning |
+        |------|-------------|---------|
+        | 🟢 Comfortable | ≥ $32,000 | Covers rent + living with buffer |
+        | 🟡 Workable | $25,000–$32,000 | Tight but manageable |
+        | 🔴 Tight | < $25,000 | High cost-of-living risk |
 
         **Notes**
 
         - Live extracted school information is marked `Live/Needs Review` or `AI/Needs Review`.
-        - The recommended OpenAI model is `gpt-5.5`; override it with
-          `GRADPATH_OPENAI_MODEL` only when needed.
+        - The recommended OpenAI model is `gpt-5.5`; override with `GRADPATH_OPENAI_MODEL`.
         - Research signals should stay conservative: in-prep, submitted, or accepted only
           when that status is accurate at application time.
         - Always verify deadlines, English requirements, GRE policy, funding, and SOP prompts
           on official program pages before applying.
         - Do not put API keys in code. Use environment variables in your terminal.
+        - **No program is labeled "safety" or "保底"** in this system by design.
         """
     )
 
@@ -1628,6 +1756,7 @@ def main() -> None:
         pi_tab,
         portfolio_tab,
         outreach_tab,
+        stipend_tab,
         guide_tab,
         explorer_tab,
         detail_tab,
@@ -1642,6 +1771,7 @@ def main() -> None:
             "PI Tracker",
             "Joint Evaluation & Portfolio",
             "Outreach & Tracker",
+            "COL Stipend Calculator",
             "Guide",
             "Match Board",
             "Program Detail",
@@ -1674,6 +1804,9 @@ def main() -> None:
 
     with outreach_tab:
         render_outreach_tracker_tab(filtered_programs)
+
+    with stipend_tab:
+        render_stipend_calculator_tab(filtered_programs)
 
     with guide_tab:
         render_guide_tab()

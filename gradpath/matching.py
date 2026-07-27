@@ -923,6 +923,7 @@ def build_pi_outreach_urls(prof_name: str, university: str = "") -> dict[str, st
     return {
         "nsf_awards": f"https://www.nsf.gov/awardsearch/simpleSearchResult?queryText={combined}",
         "nih_reporter": f"https://reporter.nih.gov/search?q={combined}",
+        "darpa_grants": f"https://www.google.com/search?q=site%3Adarpa.mil+OR+site%3Asamhsa.gov+{combined}+grant+contract",
         "google_scholar": f"https://scholar.google.com/scholar?q={combined}",
         "linkedin": f"https://www.google.com/search?q=site%3Alinkedin.com%2Fin%2F+{combined}",
         "x_twitter": f"https://www.google.com/search?q=site%3Ax.com+OR+site%3Atwitter.com+{combined}",

@@ -808,6 +808,7 @@ def test_transparent_scoring_and_portfolio_balance() -> None:
     joint = compute_joint_score(p_score, pi_score)
     assert joint > 0.0
 
+
     warnings = check_portfolio_balance([
         {"portfolio_category": "Lottery"},
         {"portfolio_category": "Lottery"},
@@ -817,4 +818,86 @@ def test_transparent_scoring_and_portfolio_balance() -> None:
     assert "Lottery" in warnings[0]
 
 
+def test_calculate_real_stipend_edge_cases() -> None:
+    """Tests COL real stipend calculation for edge cases."""
+    from gradpath.matching import calculate_real_stipend
 
+    # Zero stipend returns zeros
+    zero = calculate_real_stipend(0, "Stanford")
+    assert zero["nominal"] == 0
+    assert zero["real_stipend"] == 0
+    assert zero["tier"] == "Unknown"
+
+    # Unknown city gets default national average multiplier (1.15)
+    unknown_city = calculate_real_stipend(40000, "Some Random University Nowhere")
+    assert unknown_city["col_index"] == 1.15
+    assert unknown_city["real_stipend"] == round(40000 / 1.15)
+
+    # Tight tier when real stipend < 25000
+    tight = calculate_real_stipend(40000, "Stanford University")  # 1.85 COL
+    assert tight["tier"] == "Tight"  # 40000 / 1.85 ≈ 21621
+
+    # Comfortable tier when real stipend >= 32000
+    comfortable = calculate_real_stipend(40000, "Purdue University West Lafayette")  # 1.05
+    assert comfortable["tier"] == "Comfortable"  # 40000 / 1.05 ≈ 38095
+
+
+def test_build_pi_outreach_urls_includes_darpa() -> None:
+    """Tests that DARPA grant search link is included in outreach URLs."""
+    from gradpath.matching import build_pi_outreach_urls
+
+    urls = build_pi_outreach_urls("Madeleine Udell", "Cornell University")
+
+    assert "darpa_grants" in urls
+    assert "darpa.mil" in urls["darpa_grants"]
+    # Should still have the original 6 research links
+    assert "nsf_awards" in urls
+    assert "nih_reporter" in urls
+    assert "google_scholar" in urls
+    assert "linkedin" in urls
+    assert "x_twitter" in urls
+    assert "personal_homepage" in urls
+    # Total links: 7
+    assert len(urls) == 7
+
+
+def test_portfolio_balance_warns_on_missing_core_target() -> None:
+    """Tests that portfolio balance warns when Core/Target count is below threshold."""
+    from gradpath.scoring import check_portfolio_balance
+
+    # All Lottery — should warn about lottery ratio AND core/target shortage AND lower-variance
+    warnings = check_portfolio_balance([
+        {"portfolio_category": "Lottery"},
+        {"portfolio_category": "Lottery"},
+        {"portfolio_category": "Lottery"},
+        {"portfolio_category": "Lottery"},
+    ])
+    warning_text = " ".join(warnings)
+    assert "Lottery" in warning_text
+    assert "Core/Target" in warning_text
+
+    # Sufficient core + no lottery — should warn on lower-variance shortage only
+    good_warnings = check_portfolio_balance([
+        {"portfolio_category": "Core/Target"},
+        {"portfolio_category": "Core/Target"},
+        {"portfolio_category": "Core/Target"},
+        {"portfolio_category": "Core/Target"},
+        {"portfolio_category": "Core/Target"},
+    ])
+    warning_combined = " ".join(good_warnings)
+    assert "Lottery" not in warning_combined
+
+
+def test_col_city_dict_and_stipend_tier_color_constants() -> None:
+    """Tests that _COL_CITIES and _STIPEND_TIER_COLOR constants are defined correctly in app."""
+    import app
+
+    assert hasattr(app, "_COL_CITIES")
+    assert hasattr(app, "_STIPEND_TIER_COLOR")
+
+    # Verify Bay Area has highest COL
+    assert app._COL_CITIES["Bay Area / Stanford / Palo Alto"] == 1.85
+
+    # Verify tier color mapping
+    assert app._STIPEND_TIER_COLOR["Comfortable"] == "🟢"
+    assert app._STIPEND_TIER_COLOR["Tight"] == "🔴"
