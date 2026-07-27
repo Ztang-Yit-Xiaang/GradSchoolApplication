@@ -901,3 +901,13 @@ def test_col_city_dict_and_stipend_tier_color_constants() -> None:
     # Verify tier color mapping
     assert app._STIPEND_TIER_COLOR["Comfortable"] == "🟢"
     assert app._STIPEND_TIER_COLOR["Tight"] == "🔴"
+
+
+def test_results_dataframe_empty_returns_empty() -> None:
+    """Tests that results_dataframe with empty programs list returns empty DataFrame safely."""
+    from gradpath.export import results_dataframe
+
+    df = results_dataframe([], {})
+    assert df.empty
+    assert "Research Set" not in df.columns
+

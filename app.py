@@ -1840,7 +1840,14 @@ def main() -> None:
                 save_workspace(st.session_state.workspace)
                 st.rerun()
 
-        default_view_index = 1 if st.session_state.latest_research_set_id else 0
+        default_view_index = (
+            1
+            if st.session_state.latest_research_set_id
+            and not results.empty
+            and "Research Set" in results.columns
+            and (results["Research Set"] == st.session_state.latest_research_set_id).any()
+            else 0
+        )
         explorer_view = st.selectbox(
             "Board view",
             ["All programs", "Only latest research run", "Only manually added/live"],
@@ -1848,11 +1855,17 @@ def main() -> None:
         )
         explorer_results = results
         if explorer_view == "Only latest research run":
-            explorer_results = results.loc[
-                results["Research Set"].eq(st.session_state.latest_research_set_id)
-            ]
+            if not results.empty and "Research Set" in results.columns:
+                explorer_results = results.loc[
+                    results["Research Set"].eq(st.session_state.latest_research_set_id)
+                ]
+            else:
+                explorer_results = pd.DataFrame()
         elif explorer_view == "Only manually added/live":
-            explorer_results = results.loc[results["Source"].ne("Seeded")]
+            if not results.empty and "Source" in results.columns:
+                explorer_results = results.loc[results["Source"].ne("Seeded")]
+            else:
+                explorer_results = pd.DataFrame()
         if explorer_results.empty:
             if not st.session_state.latest_research_set_id and source_mode == "Discovered programs":
                 st.info("Run AI Deep Search to discover programs for this applicant.")
@@ -1877,19 +1890,22 @@ def main() -> None:
                 "Source",
             ]
             visible_board_columns = [
-                column for column in board_columns if column in explorer_results
+                column for column in board_columns if column in explorer_results.columns
             ]
             st.dataframe(
                 explorer_results[visible_board_columns],
                 width="stretch",
                 hide_index=True,
             )
-            options = explorer_results["University"] + " - " + explorer_results["Program"]
-            selected_label = st.selectbox("Open detail", options)
-            selected_row = explorer_results.loc[options == selected_label].iloc[0].to_dict()
-            selected_program = program_by_id(all_programs, selected_row["Program ID"])
-            if selected_program:
-                render_program_detail(selected_program, selected_row)
+            if "University" in explorer_results.columns and "Program" in explorer_results.columns:
+                options = explorer_results["University"] + " - " + explorer_results["Program"]
+                selected_label = st.selectbox("Open detail", options)
+                matching_rows = explorer_results.loc[options == selected_label]
+                if not matching_rows.empty and "Program ID" in matching_rows.columns:
+                    selected_row = matching_rows.iloc[0].to_dict()
+                    selected_program = program_by_id(all_programs, selected_row.get("Program ID", ""))
+                    if selected_program:
+                        render_program_detail(selected_program, selected_row)
 
     with detail_tab:
         st.subheader("Program Detail")
@@ -1901,8 +1917,11 @@ def main() -> None:
             label = st.selectbox("Program", list(labels.keys()), key="detail_select")
             program = program_by_id(all_programs, labels[label])
             if program:
-                row = results.loc[results["Program ID"].eq(program["id"])].iloc[0].to_dict()
-                render_program_detail(program, row)
+                if not results.empty and "Program ID" in results.columns:
+                    matching_rows = results.loc[results["Program ID"].eq(program["id"])]
+                    if not matching_rows.empty:
+                        row = matching_rows.iloc[0].to_dict()
+                        render_program_detail(program, row)
         else:
             st.info("Adjust filters to inspect a program.")
 
