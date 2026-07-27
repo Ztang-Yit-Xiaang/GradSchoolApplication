@@ -1,12 +1,31 @@
 from __future__ import annotations
 
+from io import BytesIO
 from pathlib import Path
+from zipfile import ZipFile
 
 from app import active_programs
-from gradpath.ai_extract import test_openai_connection as check_openai_connection
+from gradpath.ai_extract import (
+    reason_match_with_ai,
+)
+from gradpath.ai_extract import (
+    test_openai_connection as check_openai_connection,
+)
 from gradpath.data import default_profile, load_programs
-from gradpath.export import comparison_dataframe, results_dataframe
+from gradpath.export import (
+    comparison_dataframe,
+    reference_export_dataframe,
+    results_dataframe,
+    results_workbook_bytes,
+)
 from gradpath.filters import filter_programs
+from gradpath.matching import (
+    MATCH_SCORE_WEIGHTS,
+    REFERENCE_EXPORT_COLUMNS,
+    build_matching_rows,
+    choose_recommenders,
+    score_match,
+)
 from gradpath.profile_import import clean_latex_text, extract_text_from_upload, profile_from_text
 from gradpath.research_agent import (
     ADMIT_CONFIDENCE_BANDS,
@@ -40,6 +59,20 @@ def test_load_programs_has_ms_and_phd_records() -> None:
     assert {"MS", "PhD"}.issubset(degrees)
 
 
+def test_default_profile_contains_matching_narrative() -> None:
+    profile = default_profile()
+
+    assert profile["primary_tags"] == [
+        "optimization",
+        "RandNLA",
+        "scientific computing",
+        "decision systems",
+    ]
+    assert "Choi" in profile["recommenders"]
+    assert "gre" in profile["test_strategy"]
+    assert any("OSQP" in item for item in profile["evidence"]["projects"])
+
+
 def test_sidebar_css_has_high_contrast_widget_rules() -> None:
     css = Path("app.py").read_text()
 
@@ -56,6 +89,35 @@ def test_scoring_returns_explainable_fit() -> None:
     assert result["band"] in {"Strong", "Good", "Needs Review", "Risky"}
     assert result["strengths"] or result["missing"]
     assert "faculty" in result["sop_angle"].lower() or "research" in result["sop_angle"].lower()
+
+
+def test_match_score_uses_five_pass_weight_formula() -> None:
+    program = next(program for program in load_programs() if program["degree"] == "PhD")
+    match = score_match(program, default_profile())
+
+    expected = round(
+        MATCH_SCORE_WEIGHTS["research_fit"] * match.research_fit
+        + MATCH_SCORE_WEIGHTS["evidence_fit"] * match.evidence_fit
+        + MATCH_SCORE_WEIGHTS["letter_fit"] * match.letter_fit
+        + MATCH_SCORE_WEIGHTS["route_fit"] * match.route_fit
+        + MATCH_SCORE_WEIGHTS["practical_feasibility"] * match.practical_feasibility
+    )
+
+    assert match.overall_fit == expected
+    assert match.category in {
+        "衝刺",
+        "Moderate",
+        "保底/Lower-risk PhD",
+        "MS/job",
+        "Demoted/archive",
+    }
+    assert match.next_action
+
+
+def test_recommender_strategy_depends_on_route() -> None:
+    assert choose_recommenders("CEE/transportation") == ["Choi", "Ju", "Swati"]
+    assert choose_recommenders("RandNLA / randomized algorithms") == ["Swati", "Ju", "Choi"]
+    assert choose_recommenders("sensing inverse modeling") == ["Ren", "Ju", "Swati"]
 
 
 def test_filter_programs_can_select_phd_with_funding() -> None:
@@ -156,6 +218,35 @@ def test_results_dataframe_contains_required_export_columns() -> None:
     }
     assert expected.issubset(df.columns)
     assert df["Score"].is_monotonic_decreasing
+    assert {"Category", "POI Fit", "Next Action", "Letter Strategy"}.issubset(df.columns)
+    assert df["Overall Score"].is_monotonic_decreasing
+
+
+def test_reference_export_preserves_expected_column_order() -> None:
+    df = reference_export_dataframe(load_programs(), default_profile())
+
+    assert list(df.columns) == REFERENCE_EXPORT_COLUMNS
+    assert not df.empty
+    assert df["POI Fit"].str.len().gt(0).all()
+
+
+def test_xlsx_export_contains_required_sheets() -> None:
+    data = results_workbook_bytes(load_programs(), default_profile())
+
+    with ZipFile(BytesIO(data)) as workbook:
+        names = set(workbook.namelist())
+        workbook_xml = workbook.read("xl/workbook.xml").decode("utf-8")
+
+    assert "xl/worksheets/sheet1.xml" in names
+    assert "xl/worksheets/sheet5.xml" in names
+    for sheet_name in ["Shortlist", "Score Breakdown", "Actions", "Sources", "Profile"]:
+        assert sheet_name in workbook_xml
+
+
+def test_balance_notes_warn_when_shortlist_is_too_small() -> None:
+    rows = build_matching_rows(load_programs()[:3], default_profile())
+
+    assert any("Need" in row["Balance Note"] for row in rows)
 
 
 def test_comparison_dataframe_keeps_ms_phd_requirements() -> None:
@@ -163,18 +254,19 @@ def test_comparison_dataframe_keeps_ms_phd_requirements() -> None:
     comparison = comparison_dataframe(df.head(3).to_dict("records"))
 
     assert list(comparison.columns) == [
-        "School",
+        "University",
         "Program",
         "Degree",
-        "DDL",
-        "English",
-        "GRE",
-        "Coursework",
-        "Funding",
-        "Research Fit",
-        "SOP",
-        "Missing",
-        "Source URL",
+        "Category",
+        "Overall Score",
+        "Research Fit Score",
+        "POI Fit",
+        "Professors",
+        "Risk Note",
+        "Next Action",
+        "Letter Strategy",
+        "TOEFL/GRE",
+        "Application Website",
     ]
     assert len(comparison) == 3
 
@@ -267,6 +359,16 @@ def test_openai_connection_reports_missing_key(monkeypatch) -> None:
     assert result["available"] is False
     assert result["ok"] is False
     assert "OPENAI_API_KEY" in result["message"]
+
+
+def test_ai_match_reasoning_falls_back_to_rule_match(monkeypatch) -> None:
+    rule_match = score_match(load_programs()[0], default_profile()).as_dict()
+    monkeypatch.setattr("gradpath.ai_extract._structured_response", lambda *args, **kw: None)
+
+    result, note = reason_match_with_ai(default_profile(), load_programs()[0], rule_match)
+
+    assert result == rule_match
+    assert "deterministic" in note.lower()
 
 
 def test_transcript_parser_extracts_coursework_and_applies_profile() -> None:
@@ -529,3 +631,99 @@ def test_tex_cv_upload_is_cleaned_and_extracted() -> None:
     assert "Publication" in profile["experience"]
     assert "Teaching/TA" in profile["experience"]
     assert "scientific computing" in profile["research_interests"]
+
+
+def test_persistence_load_and_save(tmp_path) -> None:
+    from gradpath.persistence import get_pi_note, load_workspace, save_workspace, set_pi_note
+
+    test_file = tmp_path / "test_workspace.json"
+    ws = load_workspace(test_file)
+    assert ws["pi_notes"] == {}
+
+    set_pi_note(ws, "Prof. Test", "Discussed MILP optimization")
+    assert get_pi_note(ws, "Prof. Test") == "Discussed MILP optimization"
+
+    saved_ok = save_workspace(ws, test_file)
+    assert saved_ok is True
+
+    loaded_ws = load_workspace(test_file)
+    assert get_pi_note(loaded_ws, "Prof. Test") == "Discussed MILP optimization"
+
+
+def test_custom_slider_weights_matching() -> None:
+    from gradpath.matching import score_match
+
+    program = load_programs()[0]
+    profile = default_profile()
+
+    default_match = score_match(program, profile)
+    custom_match = score_match(
+        program,
+        profile,
+        custom_weights={
+            "research_fit": 0.80,
+            "evidence_fit": 0.05,
+            "letter_fit": 0.05,
+            "route_fit": 0.05,
+            "practical_feasibility": 0.05,
+        },
+    )
+
+    assert default_match.overall_fit != custom_match.overall_fit or custom_match.research_fit == default_match.research_fit
+
+
+def test_calculate_real_stipend() -> None:
+    from gradpath.matching import calculate_real_stipend
+
+    stanford_stipend = calculate_real_stipend(45000, "Stanford University")
+    purdue_stipend = calculate_real_stipend(30000, "Purdue University West Lafayette")
+
+    assert stanford_stipend["col_index"] == 1.85
+    assert stanford_stipend["real_stipend"] < 45000
+    assert purdue_stipend["col_index"] == 1.05
+    assert purdue_stipend["real_stipend"] > 25000
+
+
+def test_pi_outreach_urls_and_hiring_signal() -> None:
+    from gradpath.matching import build_pi_outreach_urls, pi_hiring_signal
+
+    urls = build_pi_outreach_urls("Ju Sun", "University of Minnesota")
+
+    assert "nsf.gov/awardsearch" in urls["nsf_awards"]
+    assert "reporter.nih.gov" in urls["nih_reporter"]
+    assert "scholar.google.com" in urls["google_scholar"]
+    assert "site%3Alinkedin.com" in urls["linkedin"]
+    assert "site%3Ax.com" in urls["x_twitter"]
+    assert "faculty+homepage" in urls["personal_homepage"]
+
+    normal_sig = pi_hiring_signal("Ju Sun", "No notes yet")
+    assert normal_sig["level"] == "Standard"
+
+    nsf_sig = pi_hiring_signal("Ju Sun", "Received new NSF Award #2401920 for optimization")
+    assert nsf_sig["level"] == "High"
+    assert "High Hiring Likelihood" in nsf_sig["hiring_badge"]
+
+
+def test_pi_peer_review_urls_and_mentorship_eval() -> None:
+    from gradpath.matching import build_pi_peer_review_urls, evaluate_pi_mentorship_flags
+
+    urls = build_pi_peer_review_urls("Ju Sun", "University of Minnesota")
+
+    assert "ratemyprofessors.com" in urls["ratemyprofessors"]
+    assert "site%3Areddit.com" in urls["reddit_peer_review"]
+    assert "site%3Arateyourpi.com" in urls["rateyourpi"]
+    assert "alumni+phd+graduates" in urls["lab_alumni_placements"]
+
+    unverified = evaluate_pi_mentorship_flags("Ju Sun", "No notes yet")
+    assert unverified["safety"] == "Unverified"
+
+    toxic_notes = evaluate_pi_mentorship_flags("Test Prof", "Students report toxic micromanage environment and 7 years delay")
+    assert toxic_notes["safety"] == "Caution"
+    assert "Red Flag Alert" in toxic_notes["badge"]
+
+    good_notes = evaluate_pi_mentorship_flags("Good Prof", "Supportive mentor, students graduated in 5 years to tenure track")
+    assert good_notes["safety"] == "Safe"
+    assert "Highly Recommended" in good_notes["badge"]
+
+
+

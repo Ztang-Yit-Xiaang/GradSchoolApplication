@@ -1,0 +1,4 @@
+interface:
+  display_name: "PhD Application Planner & Grant Intelligence"
+  short_description: "Interactively research PhD/MS programs, faculty advisors, NSF/NIH/DARPA grants, stipends, and build a decision dashboard."
+  icon: "graduation-cap"

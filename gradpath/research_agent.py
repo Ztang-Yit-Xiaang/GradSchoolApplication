@@ -10,8 +10,11 @@ from gradpath.ai_extract import (
     extract_program_with_ai,
     plan_search_queries_with_ai,
     reason_admit_confidence_with_ai,
+    reason_match_with_ai,
+    search_program_candidates_with_ai_web,
     summarize_community_evidence_with_ai,
 )
+from gradpath.matching import score_match
 from gradpath.school_research import (
     extract_program_from_text,
     fetch_page_text,
@@ -39,6 +42,7 @@ class DeepResearchRequest:
     research_set_id: str = ""
     include_community: bool = True
     search_breadth: str = "Balanced"
+    use_hosted_web_search: bool = False
 
 
 def deterministic_query_templates(
@@ -188,6 +192,31 @@ def run_deep_research(
     breadth = _breadth_config(request.search_breadth)
     candidates = []
     online_candidates = []
+    if request.use_ai and request.use_hosted_web_search:
+        context = {
+            "degree": request.degree,
+            "fields": fields,
+            "countries": request.countries,
+            "ranking_range": request.ranking_range,
+            "funding_importance": request.funding_importance,
+            "research_interests": request.research_interests,
+            "target_count": target_count,
+            "seed_schools": request.seed_schools,
+        }
+        hosted_candidates, hosted_note = search_program_candidates_with_ai_web(
+            profile, context, queries
+        )
+        candidates.extend(hosted_candidates)
+        logs.append(
+            {
+                "stage": "hosted web search",
+                "query": "OpenAI web_search_preview",
+                "candidate_url": "",
+                "source_type": "OpenAI",
+                "fetch_status": "ok" if hosted_candidates else "fallback",
+                "extraction_status": hosted_note,
+            }
+        )
     for query in queries:
         try:
             found = search_school_candidates(
@@ -290,6 +319,14 @@ def run_deep_research(
             if request.use_ai:
                 fit_plan, fit_note = build_fit_plan_with_ai(profile, program, fit_plan)
             program["next_fit_plan"] = fit_plan
+            rule_match = score_match(program, profile).as_dict()
+            match_note = "Rule match completed."
+            if request.use_ai:
+                match_reasoning, match_note = reason_match_with_ai(
+                    profile, program, rule_match
+                )
+                program["match_ai_reasoning"] = match_reasoning
+            program["match_result"] = score_match(program, profile).as_dict()
             program["search_strategy"] = search_strategy
             programs.append(program)
             recommendations.append(_recommendation_row(program, reasoning))
@@ -301,7 +338,7 @@ def run_deep_research(
                     "source_type": candidate.get("source", "Candidate"),
                     "fetch_status": "ok",
                     "extraction_status": (
-                        f"{extract_note} {reason_note} {community_note} {fit_note}"
+                        f"{extract_note} {reason_note} {community_note} {fit_note} {match_note}"
                     ),
                 }
             )
@@ -373,6 +410,12 @@ def enrich_seeded_programs(
         if use_ai:
             fit_plan, fit_note = build_fit_plan_with_ai(profile, enriched, fit_plan)
         enriched["next_fit_plan"] = fit_plan
+        rule_match = score_match(enriched, profile).as_dict()
+        match_note = "Rule match completed."
+        if use_ai:
+            match_reasoning, match_note = reason_match_with_ai(profile, enriched, rule_match)
+            enriched["match_ai_reasoning"] = match_reasoning
+        enriched["match_result"] = score_match(enriched, profile).as_dict()
         enriched["search_strategy"] = "Seeded enrichment"
         programs.append(enriched)
         logs.append(
@@ -382,7 +425,7 @@ def enrich_seeded_programs(
                 "candidate_url": seed["source"]["url"],
                 "source_type": enriched["program_source"],
                 "fetch_status": "ok",
-                "extraction_status": f"{community_note} {reason_note} {fit_note}",
+                "extraction_status": f"{community_note} {reason_note} {fit_note} {match_note}",
             }
         )
     return {
@@ -498,11 +541,19 @@ def deterministic_fit_plan(
 
 
 def _recommendation_row(program: dict[str, Any], reasoning: dict[str, Any]) -> dict[str, Any]:
+    match = program.get("match_result") or score_match(program, {}).as_dict()
     return {
         "School": program["school"],
         "Program": program["program"],
         "Degree": program["degree"],
         "Field": program["field"],
+        "Category": match.get("category", ""),
+        "Overall Score": match.get("overall_fit", reasoning["score"]),
+        "POI Fit": match.get("poi_fit", ""),
+        "Risk Note": match.get("risk_note", ""),
+        "Next Action": match.get("next_action", ""),
+        "Research Signal": match.get("research_signal", ""),
+        "Letter Strategy": match.get("letter_strategy", ""),
         "Admit Confidence Estimate": reasoning["band"],
         "Fit Score": reasoning["score"],
         "Why This Band": reasoning["why"],

@@ -22,6 +22,41 @@ PROFILE_SCHEMA = {
         "orientation": {"type": "string"},
         "career_goal": {"type": "string"},
         "sop_notes": {"type": "string"},
+        "primary_tags": {"type": "array", "items": {"type": "string"}},
+        "secondary_tags": {"type": "array", "items": {"type": "string"}},
+        "evidence": {
+            "type": "object",
+            "properties": {
+                "projects": {"type": "array", "items": {"type": "string"}},
+                "papers": {"type": "array", "items": {"type": "string"}},
+                "supervisors": {"type": "array", "items": {"type": "string"}},
+                "publications": {"type": "array", "items": {"type": "string"}},
+                "teaching": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["projects", "papers", "supervisors", "publications", "teaching"],
+            "additionalProperties": False,
+        },
+        "test_strategy": {
+            "type": "object",
+            "properties": {
+                "gre": {"type": "string"},
+                "english": {"type": "string"},
+                "ta": {"type": "string"},
+            },
+            "required": ["gre", "english", "ta"],
+            "additionalProperties": False,
+        },
+        "recommenders": {
+            "type": "object",
+            "properties": {
+                "Ju": {"type": "string"},
+                "Swati": {"type": "string"},
+                "Choi": {"type": "string"},
+                "Ren": {"type": "string"},
+            },
+            "required": ["Ju", "Swati", "Choi", "Ren"],
+            "additionalProperties": False,
+        },
     },
     "required": [
         "target_degree",
@@ -65,6 +100,12 @@ PROGRAM_SCHEMA = {
         "research_fit": {"type": "string"},
         "faculty_areas": {"type": "array", "items": {"type": "string"}},
         "evidence": {"type": "string"},
+        "program_route": {"type": "string"},
+        "poi_list": {"type": "array", "items": {"type": "string"}},
+        "admission_system": {"type": "string"},
+        "test_policy": {"type": "string"},
+        "risk_factors": {"type": "array", "items": {"type": "string"}},
+        "job_backup_value": {"type": "string"},
     },
     "required": [
         "school",
@@ -86,6 +127,12 @@ PROGRAM_SCHEMA = {
         "research_fit",
         "faculty_areas",
         "evidence",
+        "program_route",
+        "poi_list",
+        "admission_system",
+        "test_policy",
+        "risk_factors",
+        "job_backup_value",
     ],
     "additionalProperties": False,
 }
@@ -158,8 +205,66 @@ FIT_PLAN_SCHEMA = {
     "additionalProperties": False,
 }
 
+MATCH_REASONING_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "research_fit": {"type": "integer"},
+        "evidence_fit": {"type": "integer"},
+        "letter_fit": {"type": "integer"},
+        "route_fit": {"type": "integer"},
+        "practical_feasibility": {"type": "integer"},
+        "overall_fit": {"type": "integer"},
+        "category": {"type": "string"},
+        "status": {"type": "string"},
+        "poi_fit": {"type": "string"},
+        "risk_note": {"type": "string"},
+        "next_action": {"type": "string"},
+        "research_signal": {"type": "string"},
+        "letter_strategy": {"type": "string"},
+    },
+    "required": [
+        "research_fit",
+        "evidence_fit",
+        "letter_fit",
+        "route_fit",
+        "practical_feasibility",
+        "overall_fit",
+        "category",
+        "status",
+        "poi_fit",
+        "risk_note",
+        "next_action",
+        "research_signal",
+        "letter_strategy",
+    ],
+    "additionalProperties": False,
+}
+
+WEB_CANDIDATES_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "candidates": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "url": {"type": "string"},
+                    "source": {"type": "string"},
+                    "reason": {"type": "string"},
+                },
+                "required": ["title", "url", "source", "reason"],
+                "additionalProperties": False,
+            },
+        },
+        "strategy": {"type": "string"},
+    },
+    "required": ["candidates", "strategy"],
+    "additionalProperties": False,
+}
+
 ADMIT_BANDS = {"Likely-ish", "Target", "Reach", "High Reach", "Needs More Evidence"}
-DEFAULT_OPENAI_MODEL = "gpt-5.4-mini"
+DEFAULT_OPENAI_MODEL = "gpt-5.5"
 
 
 def openai_available() -> bool:
@@ -265,6 +370,14 @@ def extract_program_with_ai(
     program["preferences"]["funding"] = data["funding"]
     program["phd"]["research_fit"] = data["research_fit"]
     program["phd"]["faculty_areas"] = data["faculty_areas"]
+    program["matching"] = {
+        "program_route": data["program_route"],
+        "poi_list": data["poi_list"],
+        "admission_system": data["admission_system"],
+        "test_policy": data["test_policy"],
+        "risk_factors": data["risk_factors"],
+        "job_backup_value": data["job_backup_value"],
+    }
     program["source"]["confidence"] = "AI/Needs Review"
     return program, "AI extraction applied; verify fields against official page."
 
@@ -395,7 +508,75 @@ def build_fit_plan_with_ai(
     return data, "AI fit-plan applied; use as planning guidance."
 
 
-def _structured_response(prompt: str, schema: dict[str, Any], name: str) -> dict[str, Any] | None:
+def reason_match_with_ai(
+    profile: dict[str, Any],
+    program: dict[str, Any],
+    rule_match: dict[str, Any],
+) -> tuple[dict[str, Any], str]:
+    prompt = (
+        "Create a conservative graduate-school matching row for this applicant and program. "
+        "Use the rule match as the anchor. Do not let prestige be the first filter: first ask "
+        "whether the department can clearly understand and sponsor the applicant's research "
+        "direction. Use exact category values only: 衝刺, Moderate, 保底/Lower-risk PhD, "
+        "MS/job, Demoted/archive. Use exact status values only: Active, MS backup, "
+        "Demoted/archive. Research signal must never overclaim; use in-prep, submitted, or "
+        "accepted only when the applicant evidence supports that status.\n\n"
+        f"Applicant profile:\n{json.dumps(profile, ensure_ascii=False)}\n\n"
+        f"Program record:\n{json.dumps(program, ensure_ascii=False)}\n\n"
+        f"Rule match:\n{json.dumps(rule_match, ensure_ascii=False)}"
+    )
+    data = _structured_response(prompt, MATCH_REASONING_SCHEMA, "gradpath_match_reasoning")
+    if not data:
+        return rule_match, "AI match reasoning unavailable; used deterministic match."
+    return data, "AI match reasoning applied; verify POI and policy details."
+
+
+def search_program_candidates_with_ai_web(
+    profile: dict[str, Any],
+    context: dict[str, Any],
+    fallback_queries: list[str],
+) -> tuple[list[dict[str, str]], str]:
+    prompt = (
+        "Search the web for official graduate program pages that match this applicant. "
+        "Prefer official department admissions, graduate admissions, faculty/lab, funding, "
+        "deadline, and English proficiency pages. Return candidate pages only; do not invent "
+        "URLs. The applicant is PhD-first and values real POI fit over prestige.\n\n"
+        f"Applicant profile:\n{json.dumps(profile, ensure_ascii=False)}\n\n"
+        f"Search context:\n{json.dumps(context, ensure_ascii=False)}\n\n"
+        f"Fallback local queries:\n{json.dumps(fallback_queries, ensure_ascii=False)}"
+    )
+    data = _structured_response(
+        prompt,
+        WEB_CANDIDATES_SCHEMA,
+        "gradpath_web_candidates",
+        tools=[{"type": "web_search_preview"}],
+    )
+    if not data:
+        return [], "Hosted OpenAI web search unavailable; used local search fallback."
+    candidates = []
+    for item in data.get("candidates", []):
+        url = str(item.get("url", "")).strip()
+        title = str(item.get("title", "")).strip()
+        if not url or not title:
+            continue
+        candidates.append(
+            {
+                "title": title,
+                "url": url,
+                "source": item.get("source") or "OpenAI hosted web search",
+                "reason": item.get("reason", ""),
+            }
+        )
+    strategy = data.get("strategy", "targeted search")
+    return candidates, f"Hosted OpenAI web search applied: {strategy}"
+
+
+def _structured_response(
+    prompt: str,
+    schema: dict[str, Any],
+    name: str,
+    tools: list[dict[str, Any]] | None = None,
+) -> dict[str, Any] | None:
     if not openai_available():
         return None
     try:
@@ -405,10 +586,10 @@ def _structured_response(prompt: str, schema: dict[str, Any], name: str) -> dict
 
     try:
         client = OpenAI()
-        response = client.responses.create(
-            model=os.getenv("GRADPATH_OPENAI_MODEL", DEFAULT_OPENAI_MODEL),
-            input=prompt,
-            text={
+        kwargs: dict[str, Any] = {
+            "model": os.getenv("GRADPATH_OPENAI_MODEL", DEFAULT_OPENAI_MODEL),
+            "input": prompt,
+            "text": {
                 "format": {
                     "type": "json_schema",
                     "name": name,
@@ -416,7 +597,11 @@ def _structured_response(prompt: str, schema: dict[str, Any], name: str) -> dict
                     "strict": True,
                 }
             },
-        )
+            "reasoning": {"effort": "low"},
+        }
+        if tools:
+            kwargs["tools"] = tools
+        response = client.responses.create(**kwargs)
         return json.loads(response.output_text)
     except Exception:
         return None

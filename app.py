@@ -3,7 +3,21 @@ from __future__ import annotations
 from typing import Any
 
 import pandas as pd
-import streamlit as st
+
+try:
+    import streamlit as st
+except ModuleNotFoundError:
+    class _MissingStreamlit:
+        def set_page_config(self, **_: Any) -> None:
+            return None
+
+        def __getattr__(self, name: str) -> Any:
+            raise RuntimeError(
+                "Streamlit is required to run the GradPath UI. "
+                "Install project dependencies, then run `python -m streamlit run app.py`."
+            )
+
+    st = _MissingStreamlit()
 
 from gradpath.ai_extract import (
     extract_profile_with_ai,
@@ -13,8 +27,20 @@ from gradpath.ai_extract import (
     test_openai_connection,
 )
 from gradpath.data import default_profile, load_programs
-from gradpath.export import comparison_dataframe, results_dataframe
+from gradpath.export import (
+    comparison_dataframe,
+    reference_export_dataframe,
+    results_dataframe,
+    results_workbook_bytes,
+)
 from gradpath.filters import filter_programs
+from gradpath.matching import (
+    build_pi_outreach_urls,
+    build_pi_peer_review_urls,
+    evaluate_pi_mentorship_flags,
+    normalize_matching_profile,
+    pi_hiring_signal,
+)
 from gradpath.profile_import import (
     extract_text_from_upload,
     profile_from_text,
@@ -36,6 +62,8 @@ from gradpath.transcript_import import (
     transcript_from_upload,
     transcript_review_rows,
 )
+from gradpath.persistence import get_pi_note, load_workspace, save_workspace, set_pi_note
+from gradpath.ui.theme import CUSTOM_CSS, render_category_badge, render_kpi_card
 
 st.set_page_config(
     page_title="GradPath Planner",
@@ -367,16 +395,31 @@ EXPERIENCE_OPTIONS = [
 
 
 def init_state() -> None:
+    workspace = load_workspace()
+    if "workspace" not in st.session_state:
+        st.session_state.workspace = workspace
     if "profile" not in st.session_state:
-        st.session_state.profile = default_profile()
+        saved_profile = workspace.get("profile")
+        st.session_state.profile = saved_profile if saved_profile else default_profile()
+    if "slider_weights" not in st.session_state:
+        st.session_state.slider_weights = workspace.get(
+            "custom_slider_weights",
+            {
+                "research_fit": 0.35,
+                "evidence_fit": 0.20,
+                "letter_fit": 0.15,
+                "route_fit": 0.15,
+                "practical_feasibility": 0.15,
+            },
+        )
     if "selected_program_ids" not in st.session_state:
         st.session_state.selected_program_ids = []
     if "imported_profile_draft" not in st.session_state:
         st.session_state.imported_profile_draft = None
     if "live_programs" not in st.session_state:
-        st.session_state.live_programs = []
+        st.session_state.live_programs = workspace.get("live_programs", [])
     if "research_log" not in st.session_state:
-        st.session_state.research_log = []
+        st.session_state.research_log = workspace.get("research_logs", [])
     if "extraction_warnings" not in st.session_state:
         st.session_state.extraction_warnings = []
     if "openai_api_status" not in st.session_state:
@@ -432,40 +475,104 @@ def active_programs(
 
 
 def render_header(results: pd.DataFrame, source_mode: str) -> None:
-    st.title("GradPath Planner")
-    st.caption("Compare MS and PhD programs by requirements, fit, deadlines, and preparation gaps.")
-    st.caption(f"Showing: {source_mode}")
     st.markdown(
-        """
-        <div class="gp-workflow">
-            Current workflow:
-            <span>Profile</span> -> <span>Research Schools</span> -> <span>Explorer</span>
-            -> <span>Compare</span> -> <span>Export</span>
+        f"""
+        <div class="gp-main-header">
+            <h1 class="gp-main-title">GradPath Planner</h1>
+            <div class="gp-main-subtitle">GPT-Assisted Graduate Matching Workspace • Showing: {source_mode}</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
-    strong_count = int((results["Fit"] == "Strong").sum()) if not results.empty else 0
-    missing_alerts = int(results["Missing"].ne("None flagged").sum()) if not results.empty else 0
-    upcoming = (
-        int(pd.to_datetime(results["DDL"], errors="coerce").notna().sum())
-        if not results.empty
+    active_phd = (
+        int((results["Degree"].eq("PhD") & results["Status"].eq("Active")).sum())
+        if not results.empty and {"Degree", "Status"}.issubset(results.columns)
         else 0
     )
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Programs tracked", len(results))
-    c2.metric("Strong fit", strong_count)
-    c3.metric("Dated DDLs", upcoming)
-    c4.metric("Missing alerts", missing_alerts)
+    ms_backups = (
+        int(results["Track"].eq("MS/job").sum())
+        if not results.empty and "Track" in results.columns
+        else 0
+    )
+    sprint_count = (
+        int(results["Category"].eq("衝刺").sum())
+        if not results.empty and "Category" in results.columns
+        else 0
+    )
+    action_count = (
+        int(results["Next Action"].astype(str).ne("").sum())
+        if not results.empty and "Next Action" in results.columns
+        else 0
+    )
+
+    kpi_html = f"""
+    <div class="gp-kpi-container">
+        {render_kpi_card("Programs Tracked", len(results), "Target pool size")}
+        {render_kpi_card("Active PhD Routes", active_phd, "Target: 20-25")}
+        {render_kpi_card("MS / Job Backups", ms_backups, "Target: 6-10")}
+        {render_kpi_card("Next Actions Required", action_count, f"{sprint_count} Reach/Sprint programs")}
+    </div>
+    """
+    st.markdown(kpi_html, unsafe_allow_html=True)
+
+
+def _comma_list(value: list[str] | str) -> str:
+    if isinstance(value, list):
+        return ", ".join(str(item) for item in value)
+    return str(value)
+
+
+def _split_commas(value: str) -> list[str]:
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _evidence_to_text(evidence: Any) -> str:
+    if isinstance(evidence, dict):
+        lines = []
+        for key, value in evidence.items():
+            if isinstance(value, list):
+                lines.append(f"{key}: " + "; ".join(str(item) for item in value))
+            else:
+                lines.append(f"{key}: {value}")
+        return "\n".join(lines)
+    if isinstance(evidence, list):
+        return "\n".join(str(item) for item in evidence)
+    return str(evidence)
+
+
+def _text_to_evidence(text: str) -> dict[str, list[str]]:
+    evidence: dict[str, list[str]] = {}
+    for line in [item.strip() for item in text.splitlines() if item.strip()]:
+        if ":" in line:
+            key, value = line.split(":", maxsplit=1)
+            evidence[key.strip()] = [item.strip() for item in value.split(";") if item.strip()]
+        else:
+            evidence.setdefault("notes", []).append(line)
+    return evidence
+
+
+def _mapping_to_text(mapping: Any) -> str:
+    if isinstance(mapping, dict):
+        return "\n".join(f"{key}: {value}" for key, value in mapping.items())
+    return str(mapping)
+
+
+def _text_to_mapping(text: str) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for line in [item.strip() for item in text.splitlines() if item.strip()]:
+        if ":" in line:
+            key, value = line.split(":", maxsplit=1)
+            values[key.strip()] = value.strip()
+    return values
 
 
 def profile_form() -> dict[str, Any]:
-    profile = dict(st.session_state.profile)
+    profile = normalize_matching_profile(dict(st.session_state.profile))
     with st.form("profile_form"):
         with st.container(border=True):
             section_header(
-                "Goal & Fields",
-                "Set the degree path and quantitative fields you want the ranking to prioritize.",
+                "Goal, Fields & Narrative",
+                "The matcher uses this research story before it thinks about prestige.",
             )
             left, right = st.columns([1, 2])
             with left:
@@ -478,6 +585,20 @@ def profile_form() -> dict[str, Any]:
             with right:
                 profile["target_fields"] = st.multiselect(
                     "Target fields", FIELD_OPTIONS, default=profile["target_fields"]
+                )
+                profile["primary_tags"] = _split_commas(
+                    st.text_input(
+                        "Primary tags",
+                        value=_comma_list(profile.get("primary_tags", [])),
+                        help="Highest-weight research identity used for POI and route matching.",
+                    )
+                )
+                profile["secondary_tags"] = _split_commas(
+                    st.text_input(
+                        "Secondary tags",
+                        value=_comma_list(profile.get("secondary_tags", [])),
+                        help="Useful applied contexts that can strengthen a route.",
+                    )
                 )
 
         with st.container(border=True):
@@ -537,8 +658,16 @@ def profile_form() -> dict[str, Any]:
 
         with st.container(border=True):
             section_header(
-                "Research & SOP",
-                "These fields drive PhD research fit and statement-of-purpose suggestions.",
+                "Evidence & Research Signal",
+                "Keep claims application-safe: in-prep, submitted, or accepted only when true.",
+            )
+            profile["evidence"] = _text_to_evidence(
+                st.text_area(
+                    "Evidence",
+                    value=_evidence_to_text(profile.get("evidence", {})),
+                    height=130,
+                    help="Format each line as label: item; item; item.",
+                )
             )
             interests = st.text_input(
                 "Research interests",
@@ -550,6 +679,29 @@ def profile_form() -> dict[str, Any]:
             ]
             profile["career_goal"] = st.text_input("Career goal", value=profile["career_goal"])
             profile["sop_notes"] = st.text_area("SOP notes", value=profile["sop_notes"], height=90)
+
+        with st.container(border=True):
+            section_header(
+                "Tests & Recommenders",
+                "These drive feasibility and letter-fit calibration for each department route.",
+            )
+            tleft, tright = st.columns(2)
+            with tleft:
+                profile["test_strategy"] = _text_to_mapping(
+                    st.text_area(
+                        "Test strategy",
+                        value=_mapping_to_text(profile.get("test_strategy", {})),
+                        height=130,
+                    )
+                )
+            with tright:
+                profile["recommenders"] = _text_to_mapping(
+                    st.text_area(
+                        "Recommender contexts",
+                        value=_mapping_to_text(profile.get("recommenders", {})),
+                        height=130,
+                    )
+                )
 
         submitted = st.form_submit_button("Update profile", type="primary")
         if submitted:
@@ -571,11 +723,16 @@ def section_header(title: str, caption: str) -> None:
 
 
 def render_readiness(profile: dict[str, Any]) -> None:
+    profile = normalize_matching_profile(profile)
     course_ratio = len(profile["coursework"]) / len(COURSE_OPTIONS)
     research_depth = "High" if "Research" in profile["experience"] else "Developing"
+    evidence_count = sum(
+        len(value) if isinstance(value, list) else 1
+        for value in profile.get("evidence", {}).values()
+    )
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("English", "Ready" if profile["english_score"] >= 95 else "Review")
-    c2.metric("GRE", profile["gre_status"])
+    c1.metric("Primary tags", len(profile.get("primary_tags", [])))
+    c2.metric("Evidence items", evidence_count)
     c3.metric("Coursework", f"{course_ratio:.0%}")
     c4.metric("Research depth", research_depth)
 
@@ -660,9 +817,43 @@ def band_class(band: str) -> str:
 
 def render_program_detail(program: dict[str, Any], row: dict[str, Any]) -> None:
     st.subheader(f"{program['school']} - {program['program']}")
+    category = row.get("Category", row.get("Fit", "Needs Review"))
+    score = row.get("Overall Score", row.get("Score", 0))
     st.markdown(
-        f"<span class='{band_class(row['Fit'])}'>{row['Fit']} fit</span> "
-        f"<span class='gp-muted'>Score {row['Score']}/100</span>",
+        f"<span class='{band_class(row.get('Fit', 'Needs Review'))}'>{category}</span> "
+        f"<span class='gp-muted'>Overall score {score}/100</span>",
+        unsafe_allow_html=True,
+    )
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("Research", row.get("Research Fit Score", 0))
+    m2.metric("Evidence", row.get("Evidence Fit Score", 0))
+    m3.metric("Letters", row.get("Letter Fit Score", 0))
+    m4.metric("Route", row.get("Route Fit Score", 0))
+    m5.metric("Feasibility", row.get("Feasibility Score", 0))
+    detail_cols = st.columns(3)
+    detail_cols[0].markdown(
+        card("POI Fit", row.get("POI Fit", row.get("Research Fit", ""))),
+        unsafe_allow_html=True,
+    )
+    detail_cols[1].markdown(
+        card("Risk Note", row.get("Risk Note", row.get("Missing", ""))),
+        unsafe_allow_html=True,
+    )
+    detail_cols[2].markdown(
+        card("Next Action", row.get("Next Action", row.get("Actions", ""))),
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        card(
+            "Letter + Research Signal",
+            "<br>".join(
+                [
+                    row.get("Letter Strategy", ""),
+                    row.get("Research Signal", ""),
+                    row.get("Balance Note", ""),
+                ]
+            ),
+        ),
         unsafe_allow_html=True,
     )
     if program.get("admit_confidence"):
@@ -693,15 +884,7 @@ def render_program_detail(program: dict[str, Any], row: dict[str, Any]) -> None:
         unsafe_allow_html=True,
     )
 
-    left, mid, right = st.columns(3)
-    left.markdown(card("Strengths", row["Strengths"] or "None yet"), unsafe_allow_html=True)
-    mid.markdown(card("Missing", row["Missing"]), unsafe_allow_html=True)
-    right.markdown(
-        card("Next Actions", row["Actions"] or "Keep verifying sources."),
-        unsafe_allow_html=True,
-    )
-
-    st.markdown(card("Suggested SOP Angle", row["SOP Angle"]), unsafe_allow_html=True)
+    st.markdown(card("Suggested SOP Angle", row.get("SOP Angle", "")), unsafe_allow_html=True)
     st.markdown("**Unofficial / Community Signals**")
     community = program.get("community_summary", {})
     st.warning("Unofficial evidence is not official admissions policy; verify manually.")
@@ -829,7 +1012,7 @@ def render_import_profile_tab() -> None:
         st.dataframe(pd.DataFrame(profile_review_rows(draft)), width="stretch", hide_index=True)
         if st.button("Apply imported profile"):
             st.session_state.profile = draft
-            st.success("Imported profile applied. Explorer scores will use the updated profile.")
+            st.success("Imported profile applied. Match Board scores will use the updated profile.")
 
     if st.session_state.extraction_warnings:
         st.markdown("**Extraction notes**")
@@ -881,15 +1064,18 @@ def render_import_profile_tab() -> None:
 
 
 def render_research_schools_tab() -> None:
-    st.subheader("Research Schools")
+    st.subheader("Agent Search")
     st.write(
-        "AI searches official web sources and public evidence to discover programs "
-        "for this applicant."
+        "GPT searches, extracts, and scores official program evidence with deterministic "
+        "matching guardrails."
     )
     api_left, api_right = st.columns([2, 1])
     with api_left:
         if openai_available():
-            st.info("OPENAI_API_KEY detected. Use the test button to confirm this app can call it.")
+            st.info(
+                "OPENAI_API_KEY detected. Use the test button to confirm this app can call it. "
+                "Set GRADPATH_OPENAI_MODEL to override the recommended GPT model."
+            )
         else:
             st.info(
                 "No OPENAI_API_KEY found in this app process. "
@@ -941,6 +1127,15 @@ def render_research_schools_tab() -> None:
         with d3:
             recommended_count = st.slider("Recommended schools count", 1, 30, 8)
             search_breadth = st.selectbox("Search breadth", ["Fast", "Balanced", "Deep"], index=1)
+            hosted_web_search = st.checkbox(
+                "Use hosted OpenAI web search",
+                value=False,
+                disabled=not openai_available(),
+                help=(
+                    "Adds Responses API web_search_preview candidates, then falls back "
+                    "to local search."
+                ),
+            )
             deep_funding = st.selectbox(
                 "Funding importance",
                 ["Flexible", "Important", "Critical"],
@@ -959,8 +1154,8 @@ def render_research_schools_tab() -> None:
         )
         no_ai_panel, ai_panel = st.columns(2)
         with ai_panel:
-            st.markdown("**AI Deep Search**")
-            st.caption("Primary path: discover programs online for this candidate.")
+            st.markdown("**GPT Match Search**")
+            st.caption("Primary path: discover programs, extract evidence, and build match rows.")
             if openai_available():
                 st.success("OPENAI_API_KEY detected")
             else:
@@ -982,6 +1177,7 @@ def render_research_schools_tab() -> None:
                     use_ai=True,
                     ai_mode="AI Deep Search",
                     search_breadth=search_breadth,
+                    use_hosted_web_search=hosted_web_search,
                 )
         with no_ai_panel:
             st.markdown("**No-AI Search**")
@@ -999,6 +1195,7 @@ def render_research_schools_tab() -> None:
                     use_ai=False,
                     ai_mode="No-AI Search",
                     search_breadth=search_breadth,
+                    use_hosted_web_search=False,
                 )
         with st.expander("Optional: Enrich Sample Programs"):
             st.caption(
@@ -1012,9 +1209,9 @@ def render_research_schools_tab() -> None:
             st.info(st.session_state.deep_research_status)
             if st.session_state.deep_search_strategy:
                 st.caption(f"Search strategy: {st.session_state.deep_search_strategy}")
-            st.caption("Open Explorer and choose 'Only latest research run' to inspect it.")
+            st.caption("Open Match Board and choose 'Only latest research run' to inspect it.")
         if st.session_state.deep_research_results:
-            st.markdown("**Admit Confidence Estimate**")
+            st.markdown("**Match Preview**")
             st.dataframe(
                 pd.DataFrame(st.session_state.deep_research_results),
                 width="stretch",
@@ -1079,6 +1276,80 @@ def render_research_schools_tab() -> None:
             st.caption(warning)
 
 
+def render_pi_browser_tab(programs: list[dict[str, Any]]) -> None:
+    st.subheader("Professors of Interest (PI) Tracker & Grant Intelligence")
+    st.caption("Track faculty members, newly approved NSF/NIH/DARPA grants, hiring signals, and 1-click outreach channels.")
+
+    pi_records = []
+    for prog in programs:
+        pois = prog.get("phd", {}).get("poi_list", []) or prog.get("matching", {}).get("poi_list", [])
+        if isinstance(pois, list):
+            for poi in pois:
+                if poi and poi not in {"TBD / faculty fit to be refined", "Faculty match under review"}:
+                    pi_records.append({
+                        "Professor": poi,
+                        "University": prog.get("school", ""),
+                        "Program": prog.get("program", ""),
+                        "Field": prog.get("field", ""),
+                        "Research Areas": ", ".join(prog.get("phd", {}).get("faculty_areas", [])),
+                    })
+
+    if not pi_records:
+        st.info("No Professors of Interest extracted yet. Run Agent Search to populate PIs.")
+        return
+
+    df_pi = pd.DataFrame(pi_records).drop_duplicates(subset=["Professor", "University"])
+    search_q = st.text_input("Filter PIs by name, university, or research keyword", "", key="pi_search_q")
+    if search_q:
+        q_low = search_q.lower()
+        df_pi = df_pi[df_pi.apply(lambda r: any(q_low in str(v).lower() for v in r), axis=1)]
+
+    st.write(f"Showing **{len(df_pi)}** faculty members across target programs:")
+    for _, row in df_pi.iterrows():
+        prof_name = row["Professor"]
+        uni = row["University"]
+        prog_name = row["Program"]
+        areas = row["Research Areas"]
+        current_note = get_pi_note(st.session_state.workspace, prof_name)
+        signal = pi_hiring_signal(prof_name, current_note)
+        mentorship = evaluate_pi_mentorship_flags(prof_name, current_note)
+        urls = build_pi_outreach_urls(prof_name, uni)
+        review_urls = build_pi_peer_review_urls(prof_name, uni)
+
+        with st.expander(f"📌 {prof_name} ({uni}) — {signal['hiring_badge']} | {mentorship['badge']}"):
+            st.markdown(f"**University**: {uni} | **Program**: {prog_name}")
+            if areas:
+                st.markdown(f"**Research Focus**: {areas}")
+            st.caption(f"Hiring Signal: {signal['reason']} | Mentorship Status: {mentorship['safety']}")
+
+            st.markdown("**Outreach & Grant Links:**")
+            l1, l2, l3, l4, l5, l6 = st.columns(6)
+            l1.markdown(f"[🔬 NSF Awards]({urls['nsf_awards']})")
+            l2.markdown(f"[🏥 NIH RePORTER]({urls['nih_reporter']})")
+            l3.markdown(f"[🎓 Google Scholar]({urls['google_scholar']})")
+            l4.markdown(f"[💼 LinkedIn]({urls['linkedin']})")
+            l5.markdown(f"[🐦 X / Twitter]({urls['x_twitter']})")
+            l6.markdown(f"[🌐 Lab Homepage]({urls['personal_homepage']})")
+
+            st.markdown("**Peer Review & Advisor Safety Screening (Avoid Toxic PIs):**")
+            r1, r2, r3, r4 = st.columns(4)
+            r1.markdown(f"[💬 RateMyProfessors]({review_urls['ratemyprofessors']})")
+            r2.markdown(f"[🗣️ Reddit Peer Feedback]({review_urls['reddit_peer_review']})")
+            r3.markdown(f"[⚖️ RateYourPI Search]({review_urls['rateyourpi']})")
+            r4.markdown(f"[🎓 Lab Alumni Placements]({review_urls['lab_alumni_placements']})")
+
+            note_input = st.text_area(
+                f"Grant Notes, Peer Review & Outreach Status for {prof_name}",
+                value=current_note,
+                key=f"note_{prof_name}_{uni}",
+                placeholder="e.g. Approved NSF Award #240192; Peer reviews positive (supportive 5-yr graduation); Emailed 10/12.",
+            )
+            if note_input != current_note:
+                set_pi_note(st.session_state.workspace, prof_name, note_input)
+                save_workspace(st.session_state.workspace)
+                st.toast(f"Saved notes for {prof_name}!")
+
+
 def render_guide_tab() -> None:
     st.subheader("Guide")
     st.markdown(
@@ -1088,26 +1359,29 @@ def render_guide_tab() -> None:
         ```bash
         cd "/Users/chenyixin/Documents/Grad School Analysis"
         export OPENAI_API_KEY="your_key_here"
-        export GRADPATH_OPENAI_MODEL="gpt-5.4-mini"
+        export GRADPATH_OPENAI_MODEL="gpt-5.5"
         python3 -m streamlit run app.py
         ```
 
         **Workflow**
 
-        1. Open **Profile** and review the Yixin CV-derived default profile.
+        1. Open **Profile Narrative** and review the default research story, evidence,
+           test strategy, and recommender contexts.
         2. Open **Import Profile** if you update your CV. Upload `.tex`, `.pdf`, or `.txt`,
            extract, review, then apply the draft.
-        3. Open **Research Schools** to paste official program URLs or search by school name.
+        3. Open **Agent Search** to discover official program pages and build match rows.
         4. Use the sidebar filters to switch between MS, PhD, fields, regions, funding, and DDL.
-        5. Open **Explorer** for ranked results and **Detail** for evidence/source links.
-        6. Open **Compare** to select 2-4 programs side by side.
-        7. Open **Export** to download the ranked CSV.
+        5. Open **Match Board** for ranked results and **Program Detail** for route/risk evidence.
+        6. Open **Compare** to inspect 2-4 programs side by side.
+        7. Open **Export** to download the reference-shaped CSV or formatted XLSX workbook.
 
         **Notes**
 
         - Live extracted school information is marked `Live/Needs Review` or `AI/Needs Review`.
-        - The default OpenAI model is `gpt-5.4-mini`; override it with
+        - The recommended OpenAI model is `gpt-5.5`; override it with
           `GRADPATH_OPENAI_MODEL` only when needed.
+        - Research signals should stay conservative: in-prep, submitted, or accepted only
+          when that status is accurate at application time.
         - Always verify deadlines, English requirements, GRE policy, funding, and SOP prompts
           on official program pages before applying.
         - Do not put API keys in code. Use environment variables in your terminal.
@@ -1127,6 +1401,7 @@ def _run_deep_search_from_ui(
     use_ai: bool,
     ai_mode: str,
     search_breadth: str,
+    use_hosted_web_search: bool,
 ) -> None:
     next_index = len(st.session_state.live_programs) + 1
     research_set_id = f"{ai_mode.lower().replace(' ', '-')}-{next_index}"
@@ -1144,6 +1419,7 @@ def _run_deep_search_from_ui(
         research_set_id=research_set_id,
         include_community=True,
         search_breadth=search_breadth,
+        use_hosted_web_search=use_hosted_web_search,
     )
     with st.spinner(f"Running {ai_mode} from official and public evidence..."):
         result = run_deep_research(st.session_state.profile, request)
@@ -1196,20 +1472,25 @@ def _upsert_live_program(program: dict[str, Any]) -> None:
 
 
 def main() -> None:
-    st.markdown(PALETTE_CSS, unsafe_allow_html=True)
+    st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
     init_state()
     source_mode = render_source_mode()
     seeded_programs = load_programs()
     programs = active_programs(seeded_programs, st.session_state.live_programs, source_mode)
     all_programs = [*seeded_programs, *st.session_state.live_programs]
     filtered_programs = render_filters(programs)
-    results = results_dataframe(filtered_programs, st.session_state.profile)
+    results = results_dataframe(
+        filtered_programs,
+        st.session_state.profile,
+        custom_weights=st.session_state.slider_weights,
+    )
     render_header(results, source_mode)
 
     (
         profile_tab,
         import_tab,
         research_tab,
+        pi_tab,
         guide_tab,
         explorer_tab,
         detail_tab,
@@ -1217,20 +1498,23 @@ def main() -> None:
         export_tab,
     ) = st.tabs(
         [
-            "Profile",
+            "Profile Narrative",
             "Import Profile",
-            "Research Schools",
+            "Agent Search",
+            "PI Tracker",
             "Guide",
-            "Explorer",
-            "Detail",
+            "Match Board",
+            "Program Detail",
             "Compare",
             "Export",
         ]
     )
 
     with profile_tab:
-        st.subheader("Applicant Profile")
+        st.subheader("Profile Narrative")
         profile = profile_form()
+        st.session_state.workspace["profile"] = profile
+        save_workspace(st.session_state.workspace)
         render_readiness(profile)
 
     with import_tab:
@@ -1239,14 +1523,44 @@ def main() -> None:
     with research_tab:
         render_research_schools_tab()
 
+    with pi_tab:
+        render_pi_browser_tab(filtered_programs)
+
     with guide_tab:
         render_guide_tab()
 
     with explorer_tab:
-        st.subheader("Program Explorer")
+        st.subheader("Match Board")
+        with st.expander("⚙️ Dynamic Priority Ranker (Custom Weight Sliders)", expanded=False):
+            st.caption("Adjust sliders to dynamically re-rank all programs based on your personal preferences.")
+            c1, c2, c3, c4, c5 = st.columns(5)
+            with c1:
+                w_rf = st.slider("Research Fit", 0.0, 1.0, float(st.session_state.slider_weights.get("research_fit", 0.35)), 0.05, key="w_rf")
+            with c2:
+                w_ef = st.slider("Evidence Fit", 0.0, 1.0, float(st.session_state.slider_weights.get("evidence_fit", 0.20)), 0.05, key="w_ef")
+            with c3:
+                w_lf = st.slider("Letter Strategy", 0.0, 1.0, float(st.session_state.slider_weights.get("letter_fit", 0.15)), 0.05, key="w_lf")
+            with c4:
+                w_rt = st.slider("Route Fit", 0.0, 1.0, float(st.session_state.slider_weights.get("route_fit", 0.15)), 0.05, key="w_rt")
+            with c5:
+                w_pf = st.slider("Feasibility", 0.0, 1.0, float(st.session_state.slider_weights.get("practical_feasibility", 0.15)), 0.05, key="w_pf")
+
+            new_weights = {
+                "research_fit": w_rf,
+                "evidence_fit": w_ef,
+                "letter_fit": w_lf,
+                "route_fit": w_rt,
+                "practical_feasibility": w_pf,
+            }
+            if new_weights != st.session_state.slider_weights:
+                st.session_state.slider_weights = new_weights
+                st.session_state.workspace["custom_slider_weights"] = new_weights
+                save_workspace(st.session_state.workspace)
+                st.rerun()
+
         default_view_index = 1 if st.session_state.latest_research_set_id else 0
         explorer_view = st.selectbox(
-            "Explorer view",
+            "Board view",
             ["All programs", "Only latest research run", "Only manually added/live"],
             index=default_view_index,
         )
@@ -1263,34 +1577,32 @@ def main() -> None:
             else:
                 st.warning("No programs match the current filters.")
         else:
+            board_columns = [
+                "Category",
+                "Overall Score",
+                "University",
+                "Program",
+                "Degree",
+                "Track",
+                "Status",
+                "POI Fit",
+                "Professors",
+                "Risk Note",
+                "Next Action",
+                "Research Signal",
+                "Letter Strategy",
+                "Balance Note",
+                "Source",
+            ]
+            visible_board_columns = [
+                column for column in board_columns if column in explorer_results
+            ]
             st.dataframe(
-                explorer_results[
-                    [
-                        "Fit",
-                        "Score",
-                        "Admit Confidence Estimate",
-                        "School",
-                        "Program",
-                        "Degree",
-                        "Field",
-                        "Source",
-                        "Research Set",
-                        "Location",
-                        "DDL",
-                        "English",
-                        "GRE",
-                        "Coursework",
-                        "Funding",
-                        "Research Fit",
-                        "Missing",
-                        "Admit Confidence Why",
-                        "Confidence",
-                    ]
-                ],
+                explorer_results[visible_board_columns],
                 width="stretch",
                 hide_index=True,
             )
-            options = explorer_results["School"] + " - " + explorer_results["Program"]
+            options = explorer_results["University"] + " - " + explorer_results["Program"]
             selected_label = st.selectbox("Open detail", options)
             selected_row = explorer_results.loc[options == selected_label].iloc[0].to_dict()
             selected_program = program_by_id(all_programs, selected_row["Program ID"])
@@ -1315,7 +1627,7 @@ def main() -> None:
     with compare_tab:
         st.subheader("Compare")
         labels = {
-            f"{row['School']} - {row['Program']}": row for row in results.to_dict("records")
+            f"{row['University']} - {row['Program']}": row for row in results.to_dict("records")
         }
         selected = st.multiselect("Select 2-4 programs", list(labels.keys()), max_selections=4)
         if selected:
@@ -1327,16 +1639,34 @@ def main() -> None:
     with export_tab:
         st.subheader("Export")
         st.write(
-            "Download the filtered, ranked program table with fit explanations and source URLs."
+            "Download the filtered match board in the reference CSV shape "
+            "or as a formatted workbook."
+        )
+        export_df = reference_export_dataframe(filtered_programs, st.session_state.profile)
+        workbook_data = (
+            results_workbook_bytes(filtered_programs, st.session_state.profile)
+            if filtered_programs
+            else b""
         )
         st.download_button(
             "Download CSV",
-            data=results.to_csv(index=False).encode("utf-8"),
-            file_name="gradpath_ranked_programs.csv",
+            data=export_df.to_csv(index=False).encode("utf-8"),
+            file_name="gradpath_matching_shortlist.csv",
             mime="text/csv",
-            disabled=results.empty,
+            disabled=export_df.empty,
         )
-        st.dataframe(results, width="stretch", hide_index=True)
+        st.download_button(
+            "Download XLSX",
+            data=workbook_data,
+            file_name="gradpath_matching_workbook.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            disabled=not workbook_data,
+        )
+        st.dataframe(
+            export_df if not export_df.empty else results,
+            width="stretch",
+            hide_index=True,
+        )
 
 
 if __name__ == "__main__":

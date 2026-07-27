@@ -29,9 +29,9 @@ def default_profile() -> dict[str, Any]:
         ],
         "gpa": 4.0,
         "english_test": "TOEFL",
-        "english_score": 102,
-        "gre_status": "Planning",
-        "gre_quant": 165,
+        "english_score": 98,
+        "gre_status": "Completed",
+        "gre_quant": 168,
         "coursework": [
             "Programming",
             "Algorithms",
@@ -53,24 +53,75 @@ def default_profile() -> dict[str, Any]:
             "Leadership",
         ],
         "research_interests": [
-            "machine learning",
             "optimization",
-            "scientific computing",
+            "RandNLA",
             "randomized numerical linear algebra",
-            "sequential decision making",
-            "learning-augmented decision systems",
-            "predictive modeling",
+            "scientific computing",
+            "decision systems",
+            "transportation",
+            "urban systems",
+            "ML systems",
+            "sensing/inverse modeling",
         ],
+        "primary_tags": [
+            "optimization",
+            "RandNLA",
+            "scientific computing",
+            "decision systems",
+        ],
+        "secondary_tags": [
+            "transportation",
+            "urban systems",
+            "ML systems",
+            "sensing/inverse modeling",
+        ],
+        "evidence": {
+            "projects": [
+                "OSQP/Torch optimization work with Ju Sun",
+                "RandNLA UROP with Swati Padmanabhan",
+                "Travel-itinerary predictive optimization with Prof. Choi",
+                "Sensing/inverse modeling with Prof. Hongliang Ren",
+            ],
+            "papers": [
+                "Travel-itinerary paper may target TRB/CHI with Choi; label only as "
+                "in-prep, submitted, or accepted when true.",
+                "OSQP/Torch and RandNLA papers may help only if their application-time "
+                "status is accurate.",
+            ],
+            "teaching": [
+                "UMN undergraduate TA experience in CSCI 2081",
+            ],
+        },
+        "test_strategy": {
+            "gre": (
+                "Probably no retake. Current GRE: 150V + 168Q + 3.5 AWA. "
+                "Submit only where optional and helpful, especially quant-heavy OR/IE, "
+                "applied math, and MS programs."
+            ),
+            "english": (
+                "Fall 2023 TOEFL 98 likely expires for official reporting by Fall 2027. "
+                "Check whether a U.S. bachelor's degree waives admission English proficiency."
+            ),
+            "ta": (
+                "Prior TOEFL Speaking 23/30 plus UMN undergraduate TA experience supports "
+                "teaching readiness, but graduate TA/oral rules must be checked by school."
+            ),
+        },
+        "recommenders": {
+            "Ju": "Optimization, OSQP/Torch, scalable computation, and local PhD fit.",
+            "Swati": "RandNLA, randomized algorithms, and scientific computing.",
+            "Choi": "Transportation, urban systems, decision systems, and itinerary paper.",
+            "Ren": "Sensing, inverse modeling, and signal-processing angle.",
+        },
         "preferred_regions": ["United States"],
         "funding_need": "Critical",
         "orientation": "Research + career",
         "career_goal": (
-            "Research-oriented MS/PhD preparation in machine learning, optimization, "
-            "scientific computing, and data-driven decision systems."
+            "PhD-first search around optimization and scalable computation for decision systems, "
+            "with MS/job backups only where employability value is clear."
         ),
         "sop_notes": (
-            "Emphasize research maturity, cross-disciplinary quantitative training, "
-            "publications, optimization/ML projects, randomized numerical linear algebra, "
-            "and faculty fit for research-intensive programs."
+            "Prestige is not the first filter. Prioritize departments that can clearly understand "
+            "and sponsor optimization + scalable computation for decision systems."
         ),
     }

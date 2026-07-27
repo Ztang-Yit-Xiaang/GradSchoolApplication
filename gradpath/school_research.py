@@ -149,6 +149,7 @@ def extract_program_from_text(
         "Research/advisor fit needs manual review.",
     )
     faculty_areas = _extract_research_areas(normalized)
+    program_route = _infer_program_route(field, degree, title, normalized)
 
     return {
         "id": _program_id(source_url, school, degree),
@@ -185,6 +186,14 @@ def extract_program_from_text(
         "phd": {
             "research_fit": research_fit if degree == "PhD" else "N/A",
             "faculty_areas": faculty_areas if degree == "PhD" else [],
+        },
+        "matching": {
+            "program_route": program_route,
+            "poi_list": [],
+            "admission_system": _infer_admission_system(normalized),
+            "test_policy": f"{gre_summary}; {english_summary}",
+            "risk_factors": _infer_matching_risks(normalized, degree),
+            "job_backup_value": _infer_job_backup_value(degree, school, field),
         },
         "source": {
             "url": source_url,
@@ -357,6 +366,56 @@ def _infer_program_name(title: str, field: str, degree: str) -> str:
     if title and len(title) <= 110:
         return title
     return f"{degree} in {field}"
+
+
+def _infer_program_route(field: str, degree: str, title: str, text: str) -> str:
+    route_text = f"{field} {degree} {title} {text}".lower()
+    if any(word in route_text for word in ["ieor", "iems", "industrial", "isye"]):
+        return "OR/IE"
+    if "operations research" in route_text:
+        return "OR/IE"
+    if any(word in route_text for word in ["civil", "cee", "transportation", "mobility"]):
+        return "CEE/transportation"
+    if any(word in route_text for word in ["applied math", "mathematics"]):
+        return "Applied Math"
+    if "stat" in route_text:
+        return "Statistics"
+    if "data science" in route_text:
+        return "Data Science"
+    if "computer science" in route_text or "cse" in route_text:
+        return "CS"
+    return field or "Needs Review"
+
+
+def _infer_admission_system(text: str) -> str:
+    if "committee" in text:
+        return "committee"
+    if any(word in text for word in ["advisor", "supervisor", "faculty sponsor"]):
+        return "advisor-driven/mixed"
+    return "mixed/verify"
+
+
+def _infer_matching_risks(text: str, degree: str) -> list[str]:
+    risks = []
+    if any(word in text for word in ["highly competitive", "selective", "limited"]):
+        risks.append("selectivity")
+    if degree == "PhD" and not any(word in text for word in ["faculty", "advisor", "research"]):
+        risks.append("POI route unclear")
+    if "toefl" not in text and "ielts" not in text:
+        risks.append("English policy needs review")
+    if "fund" not in text and degree == "PhD":
+        risks.append("funding policy needs review")
+    return risks or ["competitive admissions"]
+
+
+def _infer_job_backup_value(degree: str, school: str, field: str) -> str:
+    if degree == "PhD":
+        return "Not a job-backup row; evaluate only for PhD mentorship."
+    text = f"{school} {field}".lower()
+    strong_ms_markers = ["computer science", "data science", "georgia tech", "washington"]
+    if any(word in text for word in strong_ms_markers):
+        return "Potential MS/job backup; verify placement, cost, and OPT-friendly outcomes."
+    return "MS/job value needs ROI and placement verification."
 
 
 def _extract_deadline(text: str) -> str:
