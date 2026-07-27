@@ -263,6 +263,18 @@ WEB_CANDIDATES_SCHEMA = {
     "additionalProperties": False,
 }
 
+UNIFIED_PROGRAM_ANALYSIS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "program": PROGRAM_SCHEMA,
+        "admit_confidence": ADMIT_REASONING_SCHEMA,
+        "fit_plan": FIT_PLAN_SCHEMA,
+        "match_reasoning": MATCH_REASONING_SCHEMA,
+    },
+    "required": ["program", "admit_confidence", "fit_plan", "match_reasoning"],
+    "additionalProperties": False,
+}
+
 ADMIT_BANDS = {"Likely-ish", "Target", "Reach", "High Reach", "Needs More Evidence"}
 DEFAULT_OPENAI_MODEL = "gpt-5.5"
 
@@ -569,6 +581,32 @@ def search_program_candidates_with_ai_web(
         )
     strategy = data.get("strategy", "targeted search")
     return candidates, f"Hosted OpenAI web search applied: {strategy}"
+
+
+def analyze_program_unified_with_ai(
+    text: str,
+    profile: dict[str, Any],
+    rule_program: dict[str, Any],
+    source_url: str,
+) -> tuple[dict[str, Any], str]:
+    """Perform single-pass extraction, admit confidence, fit plan, and match reasoning in 1 unified API call."""
+    prompt = (
+        "Perform a single-pass graduate admissions analysis for this applicant and official admissions page.\n"
+        "1. Extract official requirement fields (program).\n"
+        "2. Reason admit confidence planning band & score (admit_confidence).\n"
+        "3. Formulate next fit improvement steps (fit_plan).\n"
+        "4. Calculate route & research match scores (match_reasoning).\n\n"
+        "Keep all claims conservative and strictly grounded in official text.\n\n"
+        f"Source URL: {source_url}\n"
+        f"Applicant profile:\n{json.dumps(profile, ensure_ascii=False)}\n\n"
+        f"Rule program draft:\n{json.dumps(rule_program, ensure_ascii=False)}\n\n"
+        f"Page text:\n{text[:10000]}"
+    )
+    data = _structured_response(prompt, UNIFIED_PROGRAM_ANALYSIS_SCHEMA, "gradpath_unified_analysis")
+    if not data:
+        return {}, "Unified AI analysis unavailable; using fallback pipeline."
+    return data, "Unified AI single-pass extraction and reasoning applied."
+
 
 
 def _structured_response(

@@ -911,3 +911,13 @@ def test_results_dataframe_empty_returns_empty() -> None:
     assert df.empty
     assert "Research Set" not in df.columns
 
+
+def test_unified_ai_analysis_fallback_when_no_key() -> None:
+    """Tests analyze_program_unified_with_ai fallback when API key is missing."""
+    from gradpath.ai_extract import analyze_program_unified_with_ai
+
+    data, note = analyze_program_unified_with_ai("Sample page text", {}, {}, "https://test.edu")
+    assert data == {}
+    assert "unavailable" in note
+
+

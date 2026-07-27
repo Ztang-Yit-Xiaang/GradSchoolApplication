@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
 from urllib.parse import urlparse
 
 from gradpath.ai_extract import (
+    analyze_program_unified_with_ai,
     build_fit_plan_with_ai,
     extract_program_with_ai,
     plan_search_queries_with_ai,
@@ -169,6 +171,167 @@ def deterministic_admit_confidence(
     }
 
 
+def _process_single_candidate(
+    candidate: dict[str, str],
+    profile: dict[str, Any],
+    request: DeepResearchRequest,
+    primary_field: str,
+    research_set_id: str,
+    search_strategy: str,
+    breadth: dict[str, Any],
+) -> tuple[dict[str, Any] | None, dict[str, str]]:
+    url = candidate["url"]
+    try:
+        title, page_text = fetch_page_text(url)
+        program = extract_program_from_text(
+            page_text, url, primary_field, request.degree, title
+        )
+        program["source"]["confidence"] = "Deep Research/Needs Review"
+        program["program_source"] = "Deep Research"
+        program["research_set_id"] = research_set_id
+        program["research_mode"] = request.ai_mode
+
+        extract_note = "Rule extraction completed."
+        reason_note = "Rule admit-confidence estimate."
+        fit_note = "Rule fit-plan completed."
+        match_note = "Rule match completed."
+
+        if request.use_ai:
+            unified_data, unified_note = analyze_program_unified_with_ai(
+                page_text, profile, program, url
+            )
+            if unified_data:
+                p_data = unified_data.get("program", {})
+                if p_data:
+                    program["school"] = p_data.get("school") or program["school"]
+                    program["program"] = p_data.get("program") or program["program"]
+                    program["degree"] = (
+                        p_data.get("degree")
+                        if p_data.get("degree") in {"MS", "PhD"}
+                        else program["degree"]
+                    )
+                    program["field"] = p_data.get("field") or program["field"]
+                    program["location"] = p_data.get("location") or program["location"]
+                    program["country"] = p_data.get("country") or program["country"]
+                    program["requirements"]["deadline"] = (
+                        p_data.get("deadline") or program["requirements"]["deadline"]
+                    )
+                    program["requirements"]["english"]["summary"] = p_data.get(
+                        "english_summary", ""
+                    )
+                    program["requirements"]["english"]["minimum_score"] = p_data.get(
+                        "english_minimum", 0
+                    )
+                    program["requirements"]["gre"]["status"] = (
+                        p_data.get("gre_status") or "Needs Review"
+                    )
+                    program["requirements"]["gre"]["summary"] = p_data.get(
+                        "gre_summary", ""
+                    )
+                    program["requirements"]["coursework"] = (
+                        p_data.get("coursework") or program["requirements"]["coursework"]
+                    )
+                    program["preferences"]["program"] = p_data.get("program_preference", "")
+                    program["preferences"]["sop"] = p_data.get("sop", "")
+                    program["preferences"]["experience"] = (
+                        p_data.get("experience") or program["preferences"]["experience"]
+                    )
+                    program["preferences"]["funding"] = p_data.get("funding", "")
+                    program["phd"]["research_fit"] = p_data.get("research_fit", "")
+                    program["phd"]["faculty_areas"] = p_data.get("faculty_areas", [])
+                    program["matching"] = {
+                        "program_route": p_data.get("program_route", ""),
+                        "poi_list": p_data.get("poi_list", []),
+                        "admission_system": p_data.get("admission_system", ""),
+                        "test_policy": p_data.get("test_policy", ""),
+                        "risk_factors": p_data.get("risk_factors", []),
+                        "job_backup_value": p_data.get("job_backup_value", ""),
+                    }
+                    program["source"]["confidence"] = "AI Deep Research/Needs Review"
+
+                reasoning = (
+                    unified_data.get("admit_confidence")
+                    or deterministic_admit_confidence(program, profile)
+                )
+                fit_plan = (
+                    unified_data.get("fit_plan")
+                    or deterministic_fit_plan(profile, program, reasoning)
+                )
+                match_reasoning = unified_data.get("match_reasoning")
+                if match_reasoning:
+                    program["match_ai_reasoning"] = match_reasoning
+
+                extract_note = "Unified AI single-pass extraction."
+                reason_note = "Unified AI admit-confidence."
+                fit_note = "Unified AI fit-plan."
+                match_note = "Unified AI match reasoning."
+            else:
+                program, extract_note = extract_program_with_ai(page_text, program, url)
+                program["source"]["confidence"] = "AI Deep Research/Needs Review"
+                reasoning, reason_note = reason_admit_confidence_with_ai(
+                    profile, program, deterministic_admit_confidence(program, profile)
+                )
+                fit_plan, fit_note = build_fit_plan_with_ai(
+                    profile, program, deterministic_fit_plan(profile, program, reasoning)
+                )
+                rule_match = score_match(program, profile).as_dict()
+                match_reasoning, match_note = reason_match_with_ai(
+                    profile, program, rule_match
+                )
+                program["match_ai_reasoning"] = match_reasoning
+        else:
+            reasoning = deterministic_admit_confidence(program, profile)
+            fit_plan = deterministic_fit_plan(profile, program, reasoning)
+
+        program["admit_confidence"] = reasoning
+        program["next_fit_plan"] = fit_plan
+
+        program["unofficial_evidence"] = []
+        program["community_summary"] = {
+            "summary": "Community evidence not searched.",
+            "publication_expectation": "No unofficial publication signal yet.",
+            "research_expectation": "No unofficial research signal yet.",
+            "risk_note": "Unofficial evidence is advisory only.",
+        }
+        community_note = "Community search skipped."
+        if request.include_community:
+            evidence = find_community_evidence(program, target_count=breadth["community"])
+            program["unofficial_evidence"] = evidence
+            if request.use_ai and evidence:
+                summary, community_note = summarize_community_evidence_with_ai(
+                    program, evidence
+                )
+                program["community_summary"] = summary
+            elif evidence:
+                program["community_summary"] = deterministic_community_summary(evidence)
+                community_note = "Rule community summary completed."
+
+        program["match_result"] = score_match(program, profile).as_dict()
+        program["search_strategy"] = search_strategy
+
+        log_entry = {
+            "stage": "page fetch + extraction",
+            "query": "",
+            "candidate_url": url,
+            "source_type": candidate.get("source", "Candidate"),
+            "fetch_status": "ok",
+            "extraction_status": (
+                f"{extract_note} {reason_note} {community_note} {fit_note} {match_note}"
+            ),
+        }
+        return program, log_entry
+    except Exception as exc:
+        log_entry = {
+            "stage": "page fetch + extraction",
+            "query": "",
+            "candidate_url": url,
+            "source_type": candidate.get("source", "Candidate"),
+            "fetch_status": "failed",
+            "extraction_status": str(exc),
+        }
+        return None, log_entry
+
+
 def run_deep_research(
     profile: dict[str, Any],
     request: DeepResearchRequest,
@@ -271,88 +434,27 @@ def run_deep_research(
     )
     programs = []
     recommendations = []
-    for candidate in official_candidates:
-        if len(programs) >= target_count:
-            break
-        url = candidate["url"]
-        try:
-            title, page_text = fetch_page_text(url)
-            program = extract_program_from_text(
-                page_text, url, primary_field, request.degree, title
+
+    with ThreadPoolExecutor(max_workers=min(5, len(official_candidates) or 1)) as executor:
+        futures = [
+            executor.submit(
+                _process_single_candidate,
+                candidate,
+                profile,
+                request,
+                primary_field,
+                research_set_id,
+                search_strategy,
+                breadth,
             )
-            program["source"]["confidence"] = "Deep Research/Needs Review"
-            extract_note = "Rule extraction completed."
-            if request.use_ai:
-                program, extract_note = extract_program_with_ai(page_text, program, url)
-                program["source"]["confidence"] = "AI Deep Research/Needs Review"
-            program["program_source"] = "Deep Research"
-            program["research_set_id"] = research_set_id
-            program["research_mode"] = request.ai_mode
-            program["unofficial_evidence"] = []
-            program["community_summary"] = {
-                "summary": "Community evidence not searched.",
-                "publication_expectation": "No unofficial publication signal yet.",
-                "research_expectation": "No unofficial research signal yet.",
-                "risk_note": "Unofficial evidence is advisory only.",
-            }
-            community_note = "Community search skipped."
-            if request.include_community:
-                evidence = find_community_evidence(program, target_count=breadth["community"])
-                program["unofficial_evidence"] = evidence
-                if request.use_ai and evidence:
-                    summary, community_note = summarize_community_evidence_with_ai(
-                        program, evidence
-                    )
-                    program["community_summary"] = summary
-                elif evidence:
-                    program["community_summary"] = deterministic_community_summary(evidence)
-                    community_note = "Rule community summary completed."
-            reasoning = deterministic_admit_confidence(program, profile)
-            reason_note = "Rule admit-confidence estimate."
-            if request.use_ai:
-                reasoning, reason_note = reason_admit_confidence_with_ai(
-                    profile, program, reasoning
-                )
-            program["admit_confidence"] = reasoning
-            fit_plan = deterministic_fit_plan(profile, program, reasoning)
-            fit_note = "Rule fit-plan completed."
-            if request.use_ai:
-                fit_plan, fit_note = build_fit_plan_with_ai(profile, program, fit_plan)
-            program["next_fit_plan"] = fit_plan
-            rule_match = score_match(program, profile).as_dict()
-            match_note = "Rule match completed."
-            if request.use_ai:
-                match_reasoning, match_note = reason_match_with_ai(
-                    profile, program, rule_match
-                )
-                program["match_ai_reasoning"] = match_reasoning
-            program["match_result"] = score_match(program, profile).as_dict()
-            program["search_strategy"] = search_strategy
-            programs.append(program)
-            recommendations.append(_recommendation_row(program, reasoning))
-            logs.append(
-                {
-                    "stage": "page fetch + extraction",
-                    "query": "",
-                    "candidate_url": url,
-                    "source_type": candidate.get("source", "Candidate"),
-                    "fetch_status": "ok",
-                    "extraction_status": (
-                        f"{extract_note} {reason_note} {community_note} {fit_note} {match_note}"
-                    ),
-                }
-            )
-        except Exception as exc:
-            logs.append(
-                {
-                    "stage": "page fetch + extraction",
-                    "query": "",
-                    "candidate_url": url,
-                    "source_type": candidate.get("source", "Candidate"),
-                    "fetch_status": "failed",
-                    "extraction_status": str(exc),
-                }
-            )
+            for candidate in official_candidates
+        ]
+        for future in futures:
+            program, log_entry = future.result()
+            logs.append(log_entry)
+            if program and len(programs) < target_count:
+                programs.append(program)
+                recommendations.append(_recommendation_row(program, program["admit_confidence"]))
 
     return {
         "queries": queries,
