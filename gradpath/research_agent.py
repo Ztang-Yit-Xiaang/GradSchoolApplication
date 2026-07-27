@@ -470,6 +470,67 @@ def run_deep_research(
     }
 
 
+def _enrich_single_seeded_program(
+    seed: dict[str, Any],
+    profile: dict[str, Any],
+    use_ai: bool,
+    research_set_id: str,
+) -> tuple[dict[str, Any], dict[str, str]]:
+    enriched = _copy_program(seed)
+    enriched["id"] = f"enriched-{seed['id']}"
+    enriched["program_source"] = "AI Enriched Sample" if use_ai else "Enriched Sample"
+    enriched["research_set_id"] = research_set_id
+    enriched["research_mode"] = "AI Seeded Enrichment" if use_ai else "Rule Seeded Enrichment"
+    enriched["source"] = dict(seed["source"])
+    enriched["source"]["confidence"] = (
+        "AI Enriched Seeded/Needs Review" if use_ai else "Enriched Seeded/Needs Review"
+    )
+    evidence = find_community_evidence(enriched, target_count=4)
+    enriched["unofficial_evidence"] = evidence
+    if use_ai and evidence:
+        community, community_note = summarize_community_evidence_with_ai(enriched, evidence)
+    else:
+        community = (
+            deterministic_community_summary(evidence)
+            if evidence
+            else {
+                "summary": "No community evidence collected.",
+                "publication_expectation": "No unofficial publication signal yet.",
+                "research_expectation": "No unofficial research signal yet.",
+                "risk_note": "Unofficial evidence is advisory only.",
+            }
+        )
+        community_note = "Rule community summary completed."
+    enriched["community_summary"] = community
+    reasoning = deterministic_admit_confidence(enriched, profile)
+    reason_note = "Rule admit-confidence estimate."
+    if use_ai:
+        reasoning, reason_note = reason_admit_confidence_with_ai(profile, enriched, reasoning)
+    enriched["admit_confidence"] = reasoning
+    fit_plan = deterministic_fit_plan(profile, enriched, reasoning)
+    fit_note = "Rule fit-plan completed."
+    if use_ai:
+        fit_plan, fit_note = build_fit_plan_with_ai(profile, enriched, fit_plan)
+    enriched["next_fit_plan"] = fit_plan
+    rule_match = score_match(enriched, profile).as_dict()
+    match_note = "Rule match completed."
+    if use_ai:
+        match_reasoning, match_note = reason_match_with_ai(profile, enriched, rule_match)
+        enriched["match_ai_reasoning"] = match_reasoning
+    enriched["match_result"] = score_match(enriched, profile).as_dict()
+    enriched["search_strategy"] = "Seeded enrichment"
+
+    log_entry = {
+        "stage": "seeded enrichment",
+        "query": seed["school"],
+        "candidate_url": seed["source"]["url"],
+        "source_type": enriched["program_source"],
+        "fetch_status": "ok",
+        "extraction_status": f"{community_note} {reason_note} {fit_note} {match_note}",
+    }
+    return enriched, log_entry
+
+
 def enrich_seeded_programs(
     seeded_programs: list[dict[str, Any]],
     profile: dict[str, Any],
@@ -479,57 +540,24 @@ def enrich_seeded_programs(
     programs = []
     logs = []
     research_set_id = f"seeded-enrichment-{date.today().isoformat()}"
-    for seed in seeded_programs[:limit]:
-        enriched = _copy_program(seed)
-        enriched["id"] = f"enriched-{seed['id']}"
-        enriched["program_source"] = "AI Enriched Sample" if use_ai else "Enriched Sample"
-        enriched["research_set_id"] = research_set_id
-        enriched["research_mode"] = "AI Seeded Enrichment" if use_ai else "Rule Seeded Enrichment"
-        enriched["source"] = dict(seed["source"])
-        enriched["source"]["confidence"] = (
-            "AI Enriched Seeded/Needs Review" if use_ai else "Enriched Seeded/Needs Review"
-        )
-        evidence = find_community_evidence(enriched, target_count=4)
-        enriched["unofficial_evidence"] = evidence
-        if use_ai and evidence:
-            community, community_note = summarize_community_evidence_with_ai(enriched, evidence)
-        else:
-            community = deterministic_community_summary(evidence) if evidence else {
-                "summary": "No community evidence collected.",
-                "publication_expectation": "No unofficial publication signal yet.",
-                "research_expectation": "No unofficial research signal yet.",
-                "risk_note": "Unofficial evidence is advisory only.",
-            }
-            community_note = "Rule community summary completed."
-        enriched["community_summary"] = community
-        reasoning = deterministic_admit_confidence(enriched, profile)
-        reason_note = "Rule admit-confidence estimate."
-        if use_ai:
-            reasoning, reason_note = reason_admit_confidence_with_ai(profile, enriched, reasoning)
-        enriched["admit_confidence"] = reasoning
-        fit_plan = deterministic_fit_plan(profile, enriched, reasoning)
-        fit_note = "Rule fit-plan completed."
-        if use_ai:
-            fit_plan, fit_note = build_fit_plan_with_ai(profile, enriched, fit_plan)
-        enriched["next_fit_plan"] = fit_plan
-        rule_match = score_match(enriched, profile).as_dict()
-        match_note = "Rule match completed."
-        if use_ai:
-            match_reasoning, match_note = reason_match_with_ai(profile, enriched, rule_match)
-            enriched["match_ai_reasoning"] = match_reasoning
-        enriched["match_result"] = score_match(enriched, profile).as_dict()
-        enriched["search_strategy"] = "Seeded enrichment"
-        programs.append(enriched)
-        logs.append(
-            {
-                "stage": "seeded enrichment",
-                "query": seed["school"],
-                "candidate_url": seed["source"]["url"],
-                "source_type": enriched["program_source"],
-                "fetch_status": "ok",
-                "extraction_status": f"{community_note} {reason_note} {fit_note} {match_note}",
-            }
-        )
+    targets = seeded_programs[:limit]
+
+    with ThreadPoolExecutor(max_workers=min(5, len(targets) or 1)) as executor:
+        futures = [
+            executor.submit(
+                _enrich_single_seeded_program,
+                seed,
+                profile,
+                use_ai,
+                research_set_id,
+            )
+            for seed in targets
+        ]
+        for future in futures:
+            enriched, log_entry = future.result()
+            programs.append(enriched)
+            logs.append(log_entry)
+
     return {
         "programs": programs,
         "recommendations": [

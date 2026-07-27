@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import pandas as pd
@@ -1262,8 +1263,16 @@ def render_research_schools_tab() -> None:
             urls = candidate_urls_from_text(url_text)
             if not urls:
                 st.warning("Paste at least one official URL.")
-            for url in urls:
-                _add_program_from_url(url, target_field, degree, use_ai)
+            else:
+                with st.spinner(f"Extracting {len(urls)} URLs in parallel..."):
+                    with ThreadPoolExecutor(max_workers=min(5, len(urls))) as executor:
+                        futures = [
+                            executor.submit(_add_program_from_url, url, target_field, degree, use_ai)
+                            for url in urls
+                        ]
+                        for future in futures:
+                            future.result()
+                st.rerun()
 
         school_text = st.text_area(
             "Schools already in mind",
