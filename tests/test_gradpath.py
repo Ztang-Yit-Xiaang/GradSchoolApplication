@@ -74,7 +74,7 @@ def test_default_profile_contains_matching_narrative() -> None:
 
 
 def test_sidebar_css_has_high_contrast_widget_rules() -> None:
-    css = Path("app.py").read_text()
+    css = Path("app.py").read_text(encoding="utf-8")
 
     assert "section[data-testid=\"stSidebar\"] div[data-baseweb=\"select\"] div" in css
     assert "section[data-testid=\"stSidebar\"] div.stButton > button" in css
@@ -724,6 +724,97 @@ def test_pi_peer_review_urls_and_mentorship_eval() -> None:
     good_notes = evaluate_pi_mentorship_flags("Good Prof", "Supportive mentor, students graduated in 5 years to tenure track")
     assert good_notes["safety"] == "Safe"
     assert "Highly Recommended" in good_notes["badge"]
+
+
+def test_canonical_schemas_and_workspace_migration(tmp_path) -> None:
+    from gradpath.persistence import load_workspace, migrate_workspace, save_workspace
+    from gradpath.schemas import SCHEMA_VERSION
+
+    old_data = {"profile": {"target_degree": "PhD"}, "pi_notes": {"Ju Sun": "NSF Award"}}
+    migrated = migrate_workspace(old_data)
+
+    assert migrated["schema_version"] == SCHEMA_VERSION
+    assert migrated["profile"]["target_degree"] == "PhD"
+    assert migrated["pi_notes"]["Ju Sun"] == "NSF Award"
+
+    file = tmp_path / "workspace.json"
+    assert save_workspace(migrated, file) is True
+    reloaded = load_workspace(file)
+    assert reloaded["schema_version"] == SCHEMA_VERSION
+    assert reloaded["pi_notes"]["Ju Sun"] == "NSF Award"
+
+
+def test_admission_mode_taxonomy_and_conflict_detection() -> None:
+    from gradpath.admission_mode import classify_admission_mode, detect_evidence_conflicts
+
+    direct = classify_admission_mode("Must secure a faculty sponsor prior to admission", degree="PhD")
+    assert direct.application_mode == "direct_pi_sponsor"
+    assert direct.contact_policy == "required"
+
+    committee = classify_admission_mode("Admissions committee reviews all applications; advisors assigned after matriculation", degree="PhD")
+    assert committee.application_mode == "committee_program"
+
+    rotation = classify_admission_mode("Students complete lab rotations during year 1 in this umbrella program", degree="PhD")
+    assert rotation.application_mode == "rotation_or_umbrella"
+
+    thesis_ms = classify_admission_mode("Master of Science with thesis required", degree="MS")
+    assert thesis_ms.application_mode == "research_thesis_ms"
+
+    coursework_ms = classify_admission_mode("Non-thesis coursework-only professional master", degree="MS")
+    assert coursework_ms.application_mode == "coursework_professional_ms"
+
+    ambiguous = classify_admission_mode("The academic advisor assists with registration", degree="PhD")
+    assert ambiguous.application_mode == "unknown_needs_review"
+
+    conflicts = detect_evidence_conflicts([
+        {"evidence_excerpt": "Application deadline: Dec 15"},
+        {"evidence_excerpt": "Application deadline: Jan 15"},
+        {"evidence_excerpt": "Fully funded PhD program"},
+        {"evidence_excerpt": "Self-funded tuition requirement"},
+    ])
+    assert len(conflicts) >= 2
+
+
+def test_transparent_scoring_and_portfolio_balance() -> None:
+    from gradpath.scoring import (
+        check_portfolio_balance,
+        compute_joint_score,
+        compute_pi_score,
+        compute_program_score,
+    )
+
+    program = {
+        "degree": "PhD",
+        "stipend_amount": 38000,
+        "col_index": 1.15,
+        "preferences": {"funding": "Fully funded assistantship"},
+        "requirements": {"coursework": ["Linear Algebra", "Optimization"], "english": {"required": False}, "gre": {"status": "Not Required"}, "deadline": "2026-12-15"},
+        "phd": {"faculty_areas": ["optimization", "machine learning"], "poi_list": ["Ju Sun", "Choi"]},
+    }
+    profile = {"research_interests": ["optimization", "scientific computing"], "coursework": ["Linear Algebra", "Optimization"]}
+
+    p_score = compute_program_score(program, profile)
+    assert p_score > 0.0
+
+    pi_data = {
+        "research_fit_score": 90.0,
+        "recent_grants": ["NSF Award #2401920"],
+        "recruiting_status": "recruiting",
+        "feedback": {"score": 2.5, "confidence": "Low", "status": "No public evidence found"},
+    }
+    pi_score = compute_pi_score(pi_data, profile)
+    assert pi_score > 0.0
+
+    joint = compute_joint_score(p_score, pi_score)
+    assert joint > 0.0
+
+    warnings = check_portfolio_balance([
+        {"portfolio_category": "Lottery"},
+        {"portfolio_category": "Lottery"},
+        {"portfolio_category": "Lottery"},
+    ])
+    assert len(warnings) > 0
+    assert "Lottery" in warnings[0]
 
 
 

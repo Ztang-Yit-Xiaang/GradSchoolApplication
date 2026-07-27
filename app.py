@@ -19,6 +19,7 @@ except ModuleNotFoundError:
 
     st = _MissingStreamlit()
 
+from gradpath.admission_mode import classify_admission_mode, detect_evidence_conflicts
 from gradpath.ai_extract import (
     extract_profile_with_ai,
     extract_program_with_ai,
@@ -41,6 +42,7 @@ from gradpath.matching import (
     normalize_matching_profile,
     pi_hiring_signal,
 )
+from gradpath.persistence import get_pi_note, load_workspace, save_workspace, set_pi_note
 from gradpath.profile_import import (
     extract_text_from_upload,
     profile_from_text,
@@ -57,13 +59,18 @@ from gradpath.school_research import (
     fetch_page_text,
     search_school_candidates,
 )
+from gradpath.scoring import (
+    check_portfolio_balance,
+    compute_joint_score,
+    compute_pi_score,
+    compute_program_score,
+)
 from gradpath.transcript_import import (
     apply_transcript_to_profile,
     transcript_from_upload,
     transcript_review_rows,
 )
-from gradpath.persistence import get_pi_note, load_workspace, save_workspace, set_pi_note
-from gradpath.ui.theme import CUSTOM_CSS, render_category_badge, render_kpi_card
+from gradpath.ui.theme import CUSTOM_CSS, render_kpi_card
 
 st.set_page_config(
     page_title="GradPath Planner",
@@ -1350,6 +1357,133 @@ def render_pi_browser_tab(programs: list[dict[str, Any]]) -> None:
                 st.toast(f"Saved notes for {prof_name}!")
 
 
+def render_admission_mode_audit_tab(programs: list[dict[str, Any]]) -> None:
+    st.subheader("Admission Mode Audit & Evidence Verification")
+    st.caption("Official evidence classification: Direct-PI vs Committee vs Rotation vs Research MS vs Coursework MS.")
+
+    if not programs:
+        st.info("No active programs in current view.")
+        return
+
+    for prog in programs:
+        school = prog.get("school", "")
+        p_name = prog.get("program", "")
+        degree = prog.get("degree", "PhD")
+
+        raw_text = f"{prog.get('summary', '')} {prog.get('phd', {})} {prog.get('matching', {})}"
+        mode_info = classify_admission_mode(raw_text, degree=degree, source_url=prog.get("url", ""), page_title=f"{school} {p_name}")
+
+        conflicts = detect_evidence_conflicts(prog.get("evidence_items", []))
+
+        mode_badge = f"🏷️ {mode_info.application_mode.replace('_', ' ').title()}"
+        with st.expander(f"🏛️ {school} — {p_name} ({degree}) | {mode_badge}"):
+            c1, c2, c3 = st.columns(3)
+            c1.markdown(f"**Contact Policy**: `{mode_info.contact_policy}`")
+            c2.markdown(f"**Advisor Binding**: `{mode_info.advisor_binding}`")
+            c3.markdown(f"**Funding Owner**: `{mode_info.funding_owner}`")
+
+            st.markdown(f"**Mode Evidence Excerpt**: *{mode_info.mode_evidence or 'Rule-based classification from program schema.'}*")
+            st.caption(f"Confidence: {mode_info.mode_confidence} | Source URL: {mode_info.mode_source_url or 'Seeded/Official Schema'}")
+
+            if conflicts:
+                st.warning("⚠️ Conflict Alerts Detected:\n" + "\n".join(f"- {c}" for c in conflicts))
+
+            if mode_info.application_mode == "direct_pi_sponsor":
+                st.info("💡 **Direct-PI Action**: Outreach before applying is essential. Verify recruiting sponsorship and funding before paying fee.")
+            elif mode_info.application_mode in ["committee_program", "rotation_or_umbrella"]:
+                st.info("💡 **Committee/Rotation Action**: Outreach optional. Application should show research fit with 2-4 faculty.")
+
+
+def render_joint_portfolio_tab(programs: list[dict[str, Any]]) -> None:
+    st.subheader("Joint Program-PI Evaluation & Balanced Portfolio")
+    st.caption("Separate 2-layer scoring engine (Program Score + PI Score) & Portfolio Balance Warnings.")
+
+    if not programs:
+        st.info("No active programs in current view.")
+        return
+
+    warnings = check_portfolio_balance(programs)
+    if warnings:
+        for w in warnings:
+            st.warning(w)
+
+    portfolio_categories = [
+        "Lottery",
+        "Reach",
+        "Core/Target",
+        "Lower-variance high-fit",
+        "Research MS backup",
+        "Professional/coursework MS backup",
+        "Needs more evidence",
+        "Archive",
+    ]
+
+    for prog in programs:
+        school = prog.get("school", "")
+        p_name = prog.get("program", "")
+        p_id = prog.get("id", f"{school}-{p_name}")
+
+        p_score = compute_program_score(prog, st.session_state.profile)
+
+        top_pi_name = (prog.get("phd", {}).get("poi_list", ["None"]) or ["None"])[0]
+        pi_data = {"name": top_pi_name, "research_fit_score": 85.0, "feedback": {"score": 2.5}}
+        pi_score = compute_pi_score(pi_data, st.session_state.profile)
+
+        joint_score = compute_joint_score(p_score, pi_score)
+
+        current_cat = prog.get("portfolio_category", "Needs more evidence")
+
+        with st.expander(f"📊 {school} — {p_name} | Joint Score: {joint_score}/100 (Program: {p_score} | Top PI: {pi_score})"):
+            st.markdown(f"**Program Score (6 Component Breakdown)**: `{p_score}/100`")
+            st.markdown(f"**Top Advisor Score ({top_pi_name})**: `{pi_score}/100`")
+
+            new_cat = st.selectbox(
+                f"Portfolio Category for {school} {p_name}",
+                options=portfolio_categories,
+                index=portfolio_categories.index(current_cat) if current_cat in portfolio_categories else 6,
+                key=f"port_cat_{p_id}",
+            )
+            if new_cat != current_cat:
+                prog["portfolio_category"] = new_cat
+                save_workspace(st.session_state.workspace)
+                st.toast(f"Updated category for {school} to {new_cat}!")
+
+
+def render_outreach_tracker_tab(programs: list[dict[str, Any]]) -> None:
+    st.subheader("Outreach Strategy & Application Tracker")
+    st.caption("Manage outreach status, SOP customization, letter tracking, and submission milestones.")
+
+    if not programs:
+        st.info("No active programs in current view.")
+        return
+
+    statuses = ["Not Started", "Drafting SOP", "Faculty Contacted", "Submitted", "Interviewing", "Offer Received", "Declined/Rejection"]
+
+    for prog in programs:
+        school = prog.get("school", "")
+        p_name = prog.get("program", "")
+        p_id = prog.get("id", f"{school}-{p_name}")
+        deadline = prog.get("requirements", {}).get("deadline", "TBD")
+
+        current_status = prog.get("submission_status", "Not Started")
+
+        with st.expander(f"📝 {school} — {p_name} | Deadline: {deadline} | Status: {current_status}"):
+            c1, c2 = st.columns(2)
+            new_status = c1.selectbox(
+                f"Application Status for {school}",
+                options=statuses,
+                index=statuses.index(current_status) if current_status in statuses else 0,
+                key=f"app_status_{p_id}",
+            )
+            if new_status != current_status:
+                prog["submission_status"] = new_status
+                save_workspace(st.session_state.workspace)
+                st.toast(f"Saved status for {school}!")
+
+            c2.markdown(f"**Application Fee**: `${prog.get('requirements', {}).get('app_fee', 95)}`")
+            st.text_input(f"SOP Customization Note for {school}", key=f"sop_note_{p_id}", placeholder="e.g. Focus on optimization & Ju Sun lab alignment.")
+
+
 def render_guide_tab() -> None:
     st.subheader("Guide")
     st.markdown(
@@ -1490,7 +1624,10 @@ def main() -> None:
         profile_tab,
         import_tab,
         research_tab,
+        mode_audit_tab,
         pi_tab,
+        portfolio_tab,
+        outreach_tab,
         guide_tab,
         explorer_tab,
         detail_tab,
@@ -1500,8 +1637,11 @@ def main() -> None:
         [
             "Profile Narrative",
             "Import Profile",
-            "Agent Search",
+            "Program Research",
+            "Admission Mode Audit",
             "PI Tracker",
+            "Joint Evaluation & Portfolio",
+            "Outreach & Tracker",
             "Guide",
             "Match Board",
             "Program Detail",
@@ -1523,8 +1663,17 @@ def main() -> None:
     with research_tab:
         render_research_schools_tab()
 
+    with mode_audit_tab:
+        render_admission_mode_audit_tab(filtered_programs)
+
     with pi_tab:
         render_pi_browser_tab(filtered_programs)
+
+    with portfolio_tab:
+        render_joint_portfolio_tab(filtered_programs)
+
+    with outreach_tab:
+        render_outreach_tracker_tab(filtered_programs)
 
     with guide_tab:
         render_guide_tab()

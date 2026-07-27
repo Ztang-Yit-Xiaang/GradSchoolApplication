@@ -80,7 +80,7 @@ Online school research:
 Environment variables:
 
 - `OPENAI_API_KEY`: enables AI extraction for CV and school pages.
-- `GRADPATH_OPENAI_MODEL`: optional model override; defaults to `gpt-5.4-mini`.
+- `GRADPATH_OPENAI_MODEL`: optional model override; defaults to `gpt-5.5`.
 - `SERPAPI_API_KEY`: optional search API key.
 
 ## Button Contrast, Similar Search, And API Check

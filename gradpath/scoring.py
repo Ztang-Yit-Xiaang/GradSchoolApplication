@@ -266,3 +266,110 @@ def _sop_angle(program: dict[str, Any], profile: dict[str, Any]) -> str:
         f"Connect {interests}, technical coursework, and career goals "
         "to the program's applied strengths."
     )
+
+
+PROGRAM_SCORE_WEIGHTS = {
+    "research_ecosystem": 0.25,
+    "advisor_resilience": 0.20,
+    "funding_col": 0.20,
+    "admission_mode": 0.15,
+    "outcomes": 0.10,
+    "personal_constraints": 0.10,
+}
+
+PI_SCORE_WEIGHTS = {
+    "research_fit": 0.35,
+    "mentoring": 0.20,
+    "recent_strength": 0.15,
+    "recruiting_confidence": 0.15,
+    "outcomes": 0.10,
+    "collaboration": 0.05,
+}
+
+
+def compute_program_score(program: dict[str, Any], profile: dict[str, Any]) -> float:
+    """Computes program score using transparent 6-component weights."""
+    eco = _research_points(program, profile, 100)[0]
+    resilience = min(100.0, len(program.get("phd", {}).get("poi_list", [])) * 33.3)
+    stipend = program.get("stipend_amount", 30000)
+    col = program.get("col_index", 1.0)
+    real_stipend = stipend / max(col, 0.5)
+    funding_score = min(100.0, (real_stipend / 35000.0) * 100.0)
+
+    mode = program.get("admission_mode", {}).get("application_mode", "unknown")
+    mode_score = (
+        90.0
+        if mode in ["committee_program", "rotation_or_umbrella", "hybrid_committee_faculty"]
+        else 70.0
+    )
+
+    outcomes = 80.0
+    constraints = 85.0
+
+    score = (
+        eco * PROGRAM_SCORE_WEIGHTS["research_ecosystem"]
+        + resilience * PROGRAM_SCORE_WEIGHTS["advisor_resilience"]
+        + funding_score * PROGRAM_SCORE_WEIGHTS["funding_col"]
+        + mode_score * PROGRAM_SCORE_WEIGHTS["admission_mode"]
+        + outcomes * PROGRAM_SCORE_WEIGHTS["outcomes"]
+        + constraints * PROGRAM_SCORE_WEIGHTS["personal_constraints"]
+    )
+    return round(score, 1)
+
+
+def compute_pi_score(pi_data: dict[str, Any], profile: dict[str, Any]) -> float:
+    """Computes PI score using transparent 6-component weights."""
+    r_fit = float(pi_data.get("research_fit_score", 75.0))
+    fb = pi_data.get("feedback", {})
+    mentoring_5 = float(fb.get("score", 2.5)) if isinstance(fb, dict) else 2.5
+    mentoring = (mentoring_5 / 5.0) * 100.0
+
+    recent = 80.0 if pi_data.get("recent_grants") else 60.0
+    recruiting = (
+        90.0 if pi_data.get("recruiting_status") in ["recruiting", "High"] else 60.0
+    )
+    outcomes = 75.0
+    collab = 75.0
+
+    score = (
+        r_fit * PI_SCORE_WEIGHTS["research_fit"]
+        + mentoring * PI_SCORE_WEIGHTS["mentoring"]
+        + recent * PI_SCORE_WEIGHTS["recent_strength"]
+        + recruiting * PI_SCORE_WEIGHTS["recruiting_confidence"]
+        + outcomes * PI_SCORE_WEIGHTS["outcomes"]
+        + collab * PI_SCORE_WEIGHTS["collaboration"]
+    )
+    return round(score, 1)
+
+
+def compute_joint_score(program_score: float, pi_score: float) -> float:
+    """Combines program score and PI score into joint evaluation score."""
+    return round(0.55 * program_score + 0.45 * pi_score, 1)
+
+
+def check_portfolio_balance(programs: list[dict[str, Any]]) -> list[str]:
+    """Generates portfolio distribution warnings and recommendations."""
+    warnings = []
+    counts: dict[str, int] = {}
+    for p in programs:
+        cat = p.get("portfolio_category", "Needs more evidence")
+        counts[cat] = counts.get(cat, 0) + 1
+
+    lottery = counts.get("Lottery", 0)
+    core = counts.get("Core/Target", 0)
+    lower_var = counts.get("Lower-variance high-fit", 0)
+
+    if lottery > 2:
+        warnings.append(
+            f"⚠️ High Risk: You have {lottery} Lottery applications (recommended max: 2). High lottery ratio decreases funded PhD placement odds."
+        )
+    if core < 3:
+        warnings.append(
+            f"💡 Portfolio Warning: Core/Target programs ({core}) is below recommended target (5). Add more Core/Target programs."
+        )
+    if lower_var < 2:
+        warnings.append(
+            f"💡 Portfolio Warning: Lower-variance high-fit programs ({lower_var}) is low (recommended: 3)."
+        )
+
+    return warnings

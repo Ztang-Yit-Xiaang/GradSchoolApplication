@@ -21,9 +21,11 @@ dev = [
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+exclude = [".agents"]
 
 [tool.setuptools.packages.find]
 include = ["gradpath*"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]
