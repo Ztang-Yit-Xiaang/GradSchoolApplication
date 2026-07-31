@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 from gradpath.ai_extract import (
     analyze_program_unified_with_ai,
     build_fit_plan_with_ai,
+    enrich_program_unified_with_ai,
     extract_program_with_ai,
     plan_search_queries_with_ai,
     reason_admit_confidence_with_ai,
@@ -380,33 +381,43 @@ def run_deep_research(
                 "extraction_status": hosted_note,
             }
         )
-    for query in queries:
+
+    def _fetch_query_candidates(query: str) -> tuple[str, list[dict[str, str]], str | None]:
         try:
             found = search_school_candidates(
                 query, primary_field, request.degree, breadth["results_per_query"]
             )
-            online_candidates.extend(found)
-            logs.append(
-                {
-                    "stage": "web search",
-                    "query": query,
-                    "candidate_url": "",
-                    "source_type": "Search",
-                    "fetch_status": "ok",
-                    "extraction_status": f"{len(found)} candidates",
-                }
-            )
+            return query, found, None
         except Exception as exc:
-            logs.append(
-                {
-                    "stage": "web search",
-                    "query": query,
-                    "candidate_url": "",
-                    "source_type": "Search",
-                    "fetch_status": "failed",
-                    "extraction_status": str(exc),
-                }
-            )
+            return query, [], str(exc)
+
+    with ThreadPoolExecutor(max_workers=min(6, len(queries) or 1)) as executor:
+        futures = [executor.submit(_fetch_query_candidates, query) for query in queries]
+        for future in futures:
+            query, found, err = future.result()
+            if err is None:
+                online_candidates.extend(found)
+                logs.append(
+                    {
+                        "stage": "web search",
+                        "query": query,
+                        "candidate_url": "",
+                        "source_type": "Search",
+                        "fetch_status": "ok",
+                        "extraction_status": f"{len(found)} candidates",
+                    }
+                )
+            else:
+                logs.append(
+                    {
+                        "stage": "web search",
+                        "query": query,
+                        "candidate_url": "",
+                        "source_type": "Search",
+                        "fetch_status": "failed",
+                        "extraction_status": err,
+                    }
+                )
 
     candidates.extend(online_candidates)
     fallback_used = False
@@ -435,7 +446,7 @@ def run_deep_research(
     programs = []
     recommendations = []
 
-    with ThreadPoolExecutor(max_workers=min(5, len(official_candidates) or 1)) as executor:
+    with ThreadPoolExecutor(max_workers=min(8, len(official_candidates) or 1)) as executor:
         futures = [
             executor.submit(
                 _process_single_candidate,
@@ -502,21 +513,35 @@ def _enrich_single_seeded_program(
         )
         community_note = "Rule community summary completed."
     enriched["community_summary"] = community
+
     reasoning = deterministic_admit_confidence(enriched, profile)
-    reason_note = "Rule admit-confidence estimate."
-    if use_ai:
-        reasoning, reason_note = reason_admit_confidence_with_ai(profile, enriched, reasoning)
-    enriched["admit_confidence"] = reasoning
     fit_plan = deterministic_fit_plan(profile, enriched, reasoning)
-    fit_note = "Rule fit-plan completed."
-    if use_ai:
-        fit_plan, fit_note = build_fit_plan_with_ai(profile, enriched, fit_plan)
-    enriched["next_fit_plan"] = fit_plan
     rule_match = score_match(enriched, profile).as_dict()
+
+    reason_note = "Rule admit-confidence estimate."
+    fit_note = "Rule fit-plan completed."
     match_note = "Rule match completed."
+
     if use_ai:
-        match_reasoning, match_note = reason_match_with_ai(profile, enriched, rule_match)
-        enriched["match_ai_reasoning"] = match_reasoning
+        unified_data, unified_note = enrich_program_unified_with_ai(profile, enriched)
+        if unified_data:
+            if "admit_confidence" in unified_data:
+                reasoning = unified_data["admit_confidence"]
+                reason_note = "Unified AI admit-confidence."
+            if "fit_plan" in unified_data:
+                fit_plan = unified_data["fit_plan"]
+                fit_note = "Unified AI fit-plan."
+            if "match_reasoning" in unified_data:
+                enriched["match_ai_reasoning"] = unified_data["match_reasoning"]
+                match_note = "Unified AI match reasoning."
+        else:
+            reasoning, reason_note = reason_admit_confidence_with_ai(profile, enriched, reasoning)
+            fit_plan, fit_note = build_fit_plan_with_ai(profile, enriched, fit_plan)
+            match_reasoning, match_note = reason_match_with_ai(profile, enriched, rule_match)
+            enriched["match_ai_reasoning"] = match_reasoning
+
+    enriched["admit_confidence"] = reasoning
+    enriched["next_fit_plan"] = fit_plan
     enriched["match_result"] = score_match(enriched, profile).as_dict()
     enriched["search_strategy"] = "Seeded enrichment"
 
@@ -542,7 +567,7 @@ def enrich_seeded_programs(
     research_set_id = f"seeded-enrichment-{date.today().isoformat()}"
     targets = seeded_programs[:limit]
 
-    with ThreadPoolExecutor(max_workers=min(5, len(targets) or 1)) as executor:
+    with ThreadPoolExecutor(max_workers=min(8, len(targets) or 1)) as executor:
         futures = [
             executor.submit(
                 _enrich_single_seeded_program,
@@ -577,38 +602,45 @@ def find_community_evidence(
     field = program.get("field", "")
     degree = program.get("degree", "")
     base = f"{school} {degree} {field} admissions publication research experience"
-    platform_queries = {
-        "Reddit": f"{base} reddit",
-        "Zhihu": f"{base} 知乎",
-        "Baidu Tieba": f"{base} 百度贴吧",
-        "Xiaohongshu": f"{base} 小红书",
-        "X/Twitter": f"{base} twitter",
-        "Facebook": f"{base} facebook",
-    }
-    evidence = []
-    for platform, query in platform_queries.items():
-        if len(evidence) >= target_count:
-            break
+    platform_queries = [
+        ("Reddit", f"{base} reddit"),
+        ("Zhihu", f"{base} 知乎"),
+        ("Baidu Tieba", f"{base} 百度贴吧"),
+        ("Xiaohongshu", f"{base} 小红书"),
+        ("X/Twitter", f"{base} twitter"),
+        ("Facebook", f"{base} facebook"),
+    ]
+
+    def _fetch_platform(item: tuple[str, str]) -> tuple[str, list[dict[str, str]]]:
+        platform, query = item
         try:
-            results = search_web_candidates(query, 2)
+            return platform, search_web_candidates(query, 2)
         except Exception:
-            results = []
-        for result in results:
+            return platform, []
+
+    evidence = []
+    with ThreadPoolExecutor(max_workers=min(6, len(platform_queries))) as executor:
+        futures = [executor.submit(_fetch_platform, item) for item in platform_queries]
+        for future in futures:
+            platform, results = future.result()
+            for result in results:
+                if len(evidence) >= target_count:
+                    break
+                evidence.append(
+                    {
+                        "platform": platform,
+                        "title": result.get("title", ""),
+                        "url": result.get("url", ""),
+                        "snippet": result.get("title", ""),
+                        "retrieved_at": date.today().isoformat(),
+                        "signal_type": _community_signal_type(result.get("title", "")),
+                        "risk_note": "Not official; verify manually.",
+                        "confidence": "Unofficial/Needs Review",
+                    }
+                )
             if len(evidence) >= target_count:
                 break
-            evidence.append(
-                {
-                    "platform": platform,
-                    "title": result.get("title", ""),
-                    "url": result.get("url", ""),
-                    "snippet": result.get("title", ""),
-                    "retrieved_at": date.today().isoformat(),
-                    "signal_type": _community_signal_type(result.get("title", "")),
-                    "risk_note": "Not official; verify manually.",
-                    "confidence": "Unofficial/Needs Review",
-                }
-            )
-    return evidence
+    return evidence[:target_count]
 
 
 def deterministic_community_summary(evidence: list[dict[str, str]]) -> dict[str, str]:

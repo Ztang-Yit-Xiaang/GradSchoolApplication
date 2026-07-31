@@ -275,12 +275,37 @@ UNIFIED_PROGRAM_ANALYSIS_SCHEMA = {
     "additionalProperties": False,
 }
 
+UNIFIED_ENRICHMENT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "admit_confidence": ADMIT_REASONING_SCHEMA,
+        "fit_plan": FIT_PLAN_SCHEMA,
+        "match_reasoning": MATCH_REASONING_SCHEMA,
+    },
+    "required": ["admit_confidence", "fit_plan", "match_reasoning"],
+    "additionalProperties": False,
+}
+
 ADMIT_BANDS = {"Likely-ish", "Target", "Reach", "High Reach", "Needs More Evidence"}
 DEFAULT_OPENAI_MODEL = "gpt-5.5"
+
+_OPENAI_CLIENT_CACHE: tuple[str | None, Any] = (None, None)
 
 
 def openai_available() -> bool:
     return bool(os.getenv("OPENAI_API_KEY"))
+
+
+def _get_openai_client() -> Any:
+    global _OPENAI_CLIENT_CACHE
+    api_key = os.getenv("OPENAI_API_KEY")
+    cached_key, client = _OPENAI_CLIENT_CACHE
+    if client is None or cached_key != api_key:
+        from openai import OpenAI
+
+        client = OpenAI(timeout=30.0)
+        _OPENAI_CLIENT_CACHE = (api_key, client)
+    return client
 
 
 def test_openai_connection() -> dict[str, Any]:
@@ -293,17 +318,7 @@ def test_openai_connection() -> dict[str, Any]:
             "message": "OPENAI_API_KEY is not set in this app process.",
         }
     try:
-        from openai import OpenAI
-    except ImportError:
-        return {
-            "available": True,
-            "ok": False,
-            "model": model,
-            "message": "The openai package is not installed in this environment.",
-        }
-
-    try:
-        client = OpenAI()
+        client = _get_openai_client()
         response = client.responses.create(
             model=model,
             input="Reply with exactly: GradPath API check OK",
@@ -332,10 +347,10 @@ def test_openai_connection() -> dict[str, Any]:
 
 def extract_profile_with_ai(text: str, rule_profile: dict[str, Any]) -> tuple[dict[str, Any], str]:
     prompt = (
-        "Extract a graduate applicant profile from this CV/resume text. "
-        "Use the provided rule-based profile as a starting point. "
-        "Return only fields in the schema. Keep unknown values conservative.\n\n"
-        f"Rule profile:\n{json.dumps(rule_profile)}\n\nCV text:\n{text[:12000]}"
+        "Extract graduate applicant profile from CV text. Use rule profile as base. "
+        "Return schema fields only. Keep unknown values conservative.\n\n"
+        f"Rule profile:\n{json.dumps(rule_profile, separators=(',', ':'))}\n\n"
+        f"CV text:\n{text[:12000]}"
     )
     data = _structured_response(prompt, PROFILE_SCHEMA, "gradpath_profile")
     if not data:
@@ -350,9 +365,8 @@ def extract_program_with_ai(
 ) -> tuple[dict[str, Any], str]:
     prompt = (
         "Extract graduate program admissions requirements from official page text. "
-        "Return conservative values, preserve uncertainty in summaries, and do not invent facts. "
-        "Use this rule-based draft as a starting point.\n\n"
-        f"Source URL: {source_url}\nDraft:\n{json.dumps(rule_program)}\n\n"
+        "Return conservative values; do not invent facts. Use draft as base.\n\n"
+        f"URL: {source_url}\nDraft:\n{json.dumps(rule_program, separators=(',', ':'))}\n\n"
         f"Page text:\n{text[:16000]}"
     )
     data = _structured_response(prompt, PROGRAM_SCHEMA, "gradpath_program")
@@ -400,13 +414,12 @@ def plan_search_queries_with_ai(
     fallback_queries: list[str],
 ) -> tuple[list[str], str]:
     prompt = (
-        "Plan official-web search queries for graduate admissions research. "
-        "Use the applicant profile and search context to produce targeted queries. "
-        "Prefer official university pages, program admissions pages, requirements pages, "
-        "TOEFL/GRE pages, funding pages, and PhD faculty/research pages. "
-        "Do not invent schools; write search queries only.\n\n"
-        f"Profile:\n{json.dumps(profile)}\n\nContext:\n{json.dumps(context)}\n\n"
-        f"Fallback query examples:\n{json.dumps(fallback_queries)}"
+        "Plan official web search queries for graduate admissions research. "
+        "Target university admissions, requirements, TOEFL/GRE, funding, and faculty pages. "
+        "Write search queries only; do not invent schools.\n\n"
+        f"Profile:\n{json.dumps(profile, separators=(',', ':'))}\n\n"
+        f"Context:\n{json.dumps(context, separators=(',', ':'))}\n\n"
+        f"Fallback queries:\n{json.dumps(fallback_queries, separators=(',', ':'))}"
     )
     data = _structured_response(prompt, QUERY_PLAN_SCHEMA, "gradpath_query_plan")
     if not data:
@@ -430,13 +443,11 @@ def reason_admit_confidence_with_ai(
     rule_reasoning: dict[str, Any],
 ) -> tuple[dict[str, Any], str]:
     prompt = (
-        "Estimate graduate admissions planning confidence using only the provided applicant "
-        "profile, extracted official-source program record, and deterministic fit reasoning. "
-        "This is not a guarantee of admission. Keep claims conservative. "
-        "Use one band exactly: Likely-ish, Target, Reach, High Reach, Needs More Evidence.\n\n"
-        f"Applicant profile:\n{json.dumps(profile)}\n\n"
-        f"Program record:\n{json.dumps(program)}\n\n"
-        f"Rule reasoning:\n{json.dumps(rule_reasoning)}"
+        "Estimate graduate admissions confidence using profile, program record, and rule reasoning. "
+        "Keep claims conservative. Use exact band: Likely-ish, Target, Reach, High Reach, Needs More Evidence.\n\n"
+        f"Profile:\n{json.dumps(profile, separators=(',', ':'))}\n\n"
+        f"Program:\n{json.dumps(program, separators=(',', ':'))}\n\n"
+        f"Rule reasoning:\n{json.dumps(rule_reasoning, separators=(',', ':'))}"
     )
     data = _structured_response(prompt, ADMIT_REASONING_SCHEMA, "gradpath_admit_reasoning")
     if not data:
@@ -461,9 +472,9 @@ def summarize_community_evidence_with_ai(
 ) -> tuple[dict[str, str], str]:
     prompt = (
         "Summarize unofficial public community evidence for graduate admissions planning. "
-        "Never treat forum posts as official requirements. Focus on whether applicants report "
-        "publications, research experience, faculty contact, or hidden preferences.\n\n"
-        f"Program:\n{json.dumps(program)}\n\nEvidence:\n{json.dumps(evidence)}"
+        "Forum posts are advisory only. Note publications, research experience, and faculty contact signals.\n\n"
+        f"Program:\n{json.dumps(program, separators=(',', ':'))}\n\n"
+        f"Evidence:\n{json.dumps(evidence, separators=(',', ':'))}"
     )
     data = _structured_response(prompt, COMMUNITY_EVIDENCE_SCHEMA, "gradpath_community")
     if not data:
@@ -483,10 +494,11 @@ def normalize_transcript_with_ai(
     text: str, rule_draft: dict[str, Any], allowed_courses: list[str]
 ) -> tuple[dict[str, Any], str]:
     prompt = (
-        "Normalize transcript text into graduate-school prerequisite categories. "
-        "Use only allowed coursework labels and keep uncertainty in notes.\n\n"
-        f"Allowed coursework labels:\n{json.dumps(allowed_courses)}\n\n"
-        f"Rule draft:\n{json.dumps(rule_draft)}\n\nTranscript text:\n{text[:12000]}"
+        "Normalize transcript text into graduate prerequisite categories. "
+        "Use allowed coursework labels only; keep uncertainty in notes.\n\n"
+        f"Allowed labels:\n{json.dumps(allowed_courses, separators=(',', ':'))}\n\n"
+        f"Rule draft:\n{json.dumps(rule_draft, separators=(',', ':'))}\n\n"
+        f"Transcript text:\n{text[:12000]}"
     )
     data = _structured_response(prompt, TRANSCRIPT_SCHEMA, "gradpath_transcript")
     if not data:
@@ -507,12 +519,11 @@ def build_fit_plan_with_ai(
     rule_plan: dict[str, Any],
 ) -> tuple[dict[str, Any], str]:
     prompt = (
-        "Create a conservative next-step fit improvement plan for this applicant and graduate "
-        "program. This is planning guidance, not an admissions guarantee. Include missing "
-        "requirements, coursework, research/advisor actions, publication/project positioning, "
-        "SOP angle, and faculty-contact advice for PhD-oriented programs.\n\n"
-        f"Applicant profile:\n{json.dumps(profile)}\n\nProgram:\n{json.dumps(program)}\n\n"
-        f"Rule plan:\n{json.dumps(rule_plan)}"
+        "Create conservative next-step fit improvement plan for applicant and program. "
+        "Include missing requirements, coursework, research/advisor actions, SOP angle, and faculty contact.\n\n"
+        f"Profile:\n{json.dumps(profile, separators=(',', ':'))}\n\n"
+        f"Program:\n{json.dumps(program, separators=(',', ':'))}\n\n"
+        f"Rule plan:\n{json.dumps(rule_plan, separators=(',', ':'))}"
     )
     data = _structured_response(prompt, FIT_PLAN_SCHEMA, "gradpath_fit_plan")
     if not data:
@@ -526,16 +537,12 @@ def reason_match_with_ai(
     rule_match: dict[str, Any],
 ) -> tuple[dict[str, Any], str]:
     prompt = (
-        "Create a conservative graduate-school matching row for this applicant and program. "
-        "Use the rule match as the anchor. Do not let prestige be the first filter: first ask "
-        "whether the department can clearly understand and sponsor the applicant's research "
-        "direction. Use exact category values only: 衝刺, Moderate, 保底/Lower-risk PhD, "
-        "MS/job, Demoted/archive. Use exact status values only: Active, MS backup, "
-        "Demoted/archive. Research signal must never overclaim; use in-prep, submitted, or "
-        "accepted only when the applicant evidence supports that status.\n\n"
-        f"Applicant profile:\n{json.dumps(profile, ensure_ascii=False)}\n\n"
-        f"Program record:\n{json.dumps(program, ensure_ascii=False)}\n\n"
-        f"Rule match:\n{json.dumps(rule_match, ensure_ascii=False)}"
+        "Create conservative graduate matching row for applicant and program. Anchor on rule match. "
+        "Evaluate department research fit before prestige. Exact categories: 衝刺, Moderate, "
+        "保底/Lower-risk PhD, MS/job, Demoted/archive. Exact status: Active, MS backup, Demoted/archive.\n\n"
+        f"Profile:\n{json.dumps(profile, separators=(',', ':'), ensure_ascii=False)}\n\n"
+        f"Program:\n{json.dumps(program, separators=(',', ':'), ensure_ascii=False)}\n\n"
+        f"Rule match:\n{json.dumps(rule_match, separators=(',', ':'), ensure_ascii=False)}"
     )
     data = _structured_response(prompt, MATCH_REASONING_SCHEMA, "gradpath_match_reasoning")
     if not data:
@@ -549,13 +556,12 @@ def search_program_candidates_with_ai_web(
     fallback_queries: list[str],
 ) -> tuple[list[dict[str, str]], str]:
     prompt = (
-        "Search the web for official graduate program pages that match this applicant. "
-        "Prefer official department admissions, graduate admissions, faculty/lab, funding, "
-        "deadline, and English proficiency pages. Return candidate pages only; do not invent "
-        "URLs. The applicant is PhD-first and values real POI fit over prestige.\n\n"
-        f"Applicant profile:\n{json.dumps(profile, ensure_ascii=False)}\n\n"
-        f"Search context:\n{json.dumps(context, ensure_ascii=False)}\n\n"
-        f"Fallback local queries:\n{json.dumps(fallback_queries, ensure_ascii=False)}"
+        "Search web for official graduate program pages matching applicant profile. "
+        "Target department admissions, requirements, faculty, funding, and deadline pages. "
+        "Return candidate pages only; do not invent URLs.\n\n"
+        f"Profile:\n{json.dumps(profile, separators=(',', ':'), ensure_ascii=False)}\n\n"
+        f"Context:\n{json.dumps(context, separators=(',', ':'), ensure_ascii=False)}\n\n"
+        f"Fallback queries:\n{json.dumps(fallback_queries, separators=(',', ':'), ensure_ascii=False)}"
     )
     data = _structured_response(
         prompt,
@@ -591,15 +597,15 @@ def analyze_program_unified_with_ai(
 ) -> tuple[dict[str, Any], str]:
     """Perform single-pass extraction, admit confidence, fit plan, and match reasoning in 1 unified API call."""
     prompt = (
-        "Perform a single-pass graduate admissions analysis for this applicant and official admissions page.\n"
-        "1. Extract official requirement fields (program).\n"
-        "2. Reason admit confidence planning band & score (admit_confidence).\n"
-        "3. Formulate next fit improvement steps (fit_plan).\n"
+        "Perform single-pass graduate admissions analysis for applicant and official admissions page.\n"
+        "1. Extract requirement fields (program).\n"
+        "2. Reason admit confidence band & score (admit_confidence).\n"
+        "3. Formulate next fit steps (fit_plan).\n"
         "4. Calculate route & research match scores (match_reasoning).\n\n"
-        "Keep all claims conservative and strictly grounded in official text.\n\n"
-        f"Source URL: {source_url}\n"
-        f"Applicant profile:\n{json.dumps(profile, ensure_ascii=False)}\n\n"
-        f"Rule program draft:\n{json.dumps(rule_program, ensure_ascii=False)}\n\n"
+        "Keep claims conservative and grounded in official text.\n\n"
+        f"URL: {source_url}\n"
+        f"Profile:\n{json.dumps(profile, separators=(',', ':'), ensure_ascii=False)}\n\n"
+        f"Draft:\n{json.dumps(rule_program, separators=(',', ':'), ensure_ascii=False)}\n\n"
         f"Page text:\n{text[:10000]}"
     )
     data = _structured_response(prompt, UNIFIED_PROGRAM_ANALYSIS_SCHEMA, "gradpath_unified_analysis")
@@ -607,6 +613,25 @@ def analyze_program_unified_with_ai(
         return {}, "Unified AI analysis unavailable; using fallback pipeline."
     return data, "Unified AI single-pass extraction and reasoning applied."
 
+
+def enrich_program_unified_with_ai(
+    profile: dict[str, Any],
+    program: dict[str, Any],
+) -> tuple[dict[str, Any], str]:
+    """Perform single-pass admit confidence, fit plan, and match reasoning in 1 unified API call."""
+    prompt = (
+        "Perform graduate admissions reasoning for this applicant and program.\n"
+        "1. Reason admit confidence band & score (admit_confidence).\n"
+        "2. Formulate next fit improvement steps (fit_plan).\n"
+        "3. Calculate route & research match scores (match_reasoning).\n\n"
+        "Keep claims conservative and grounded.\n\n"
+        f"Applicant profile:\n{json.dumps(profile, separators=(',', ':'), ensure_ascii=False)}\n\n"
+        f"Program record:\n{json.dumps(program, separators=(',', ':'), ensure_ascii=False)}"
+    )
+    data = _structured_response(prompt, UNIFIED_ENRICHMENT_SCHEMA, "gradpath_unified_enrichment")
+    if not data:
+        return {}, "Unified AI enrichment unavailable; using fallback reasoning."
+    return data, "Unified AI single-pass enrichment applied."
 
 
 def _structured_response(
@@ -618,12 +643,11 @@ def _structured_response(
     if not openai_available():
         return None
     try:
-        from openai import OpenAI
-    except ImportError:
+        client = _get_openai_client()
+    except Exception:
         return None
 
     try:
-        client = OpenAI()
         kwargs: dict[str, Any] = {
             "model": os.getenv("GRADPATH_OPENAI_MODEL", DEFAULT_OPENAI_MODEL),
             "input": prompt,
@@ -643,3 +667,4 @@ def _structured_response(
         return json.loads(response.output_text)
     except Exception:
         return None
+

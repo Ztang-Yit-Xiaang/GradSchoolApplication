@@ -16,6 +16,18 @@ DEFAULT_HEADERS = {
     )
 }
 
+_SESSION: Any = None
+
+
+def _get_session() -> Any:
+    global _SESSION
+    if _SESSION is None:
+        import requests
+
+        _SESSION = requests.Session()
+        _SESSION.headers.update(DEFAULT_HEADERS)
+    return _SESSION
+
 KNOWN_SCHOOL_URLS = {
     "university of michigan": "https://rackham.umich.edu/admissions/",
     "georgia tech": "https://grad.gatech.edu/admissions",
@@ -102,12 +114,12 @@ CURATED_MATCHED_PROGRAMS = [
 
 def fetch_page_text(url: str, timeout: int = 15) -> tuple[str, str]:
     try:
-        import requests
         from bs4 import BeautifulSoup
     except ImportError as exc:
         raise RuntimeError("Install requests and beautifulsoup4 for online research.") from exc
 
-    response = requests.get(url, headers=DEFAULT_HEADERS, timeout=timeout)
+    session = _get_session()
+    response = session.get(url, timeout=timeout)
     response.raise_for_status()
     soup = BeautifulSoup(response.text, "html.parser")
     for tag in soup(["script", "style", "noscript", "svg"]):
@@ -284,9 +296,8 @@ def candidate_urls_from_text(text: str) -> list[str]:
 
 
 def _search_serpapi(query: str, max_results: int) -> list[dict[str, str]]:
-    import requests
-
-    response = requests.get(
+    session = _get_session()
+    response = session.get(
         "https://serpapi.com/search.json",
         params={"q": query, "api_key": os.getenv("SERPAPI_API_KEY"), "num": max_results},
         timeout=15,
@@ -304,12 +315,11 @@ def _search_serpapi(query: str, max_results: int) -> list[dict[str, str]]:
 def _search_duckduckgo(
     query: str, max_results: int, official_only: bool = True
 ) -> list[dict[str, str]]:
-    import requests
     from bs4 import BeautifulSoup
 
-    response = requests.get(
+    session = _get_session()
+    response = session.get(
         f"https://duckduckgo.com/html/?q={quote_plus(query)}",
-        headers=DEFAULT_HEADERS,
         timeout=15,
     )
     response.raise_for_status()

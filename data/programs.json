@@ -13,11 +13,11 @@
         "required": true,
         "test": "TOEFL iBT",
         "minimum_score": 92,
-        "summary": "TOEFL iBT 92 or comparable IELTS/Duolingo; waiver may apply."
+        "summary": "TOEFL iBT 92 minimum (IELTS 7.0 / Duolingo 125); waiver available for U.S. degree."
       },
       "gre": {
         "status": "Optional",
-        "summary": "GRE optional; quantitative evidence still helpful."
+        "summary": "GRE optional; quantitative background evaluated via STEM coursework and experience."
       },
       "coursework": [
         "Programming",
@@ -30,15 +30,15 @@
       "program": "Applied, career-oriented data science with capstone emphasis",
       "sop": "Explain quantitative preparation, programming experience, and data-driven career goals.",
       "experience": ["Projects", "Internship"],
-      "funding": "Limited master's funding; assistantships competitive."
+      "funding": "Master's program funding is limited; hourly TA/RA positions may be applied for after enrollment."
     },
     "phd": {
       "research_fit": "N/A",
       "faculty_areas": []
     },
     "source": {
-      "url": "https://www.washington.edu/",
-      "retrieved_at": "2026-05-24",
+      "url": "https://msds.washington.edu/",
+      "retrieved_at": "2026-07-31",
       "confidence": "Sample"
     }
   },
@@ -51,16 +51,16 @@
     "location": "Atlanta, GA",
     "country": "United States",
     "requirements": {
-      "deadline": "2026-12-15",
+      "deadline": "2026-12-01",
       "english": {
         "required": true,
         "test": "TOEFL iBT",
         "minimum_score": 100,
-        "summary": "TOEFL iBT 100 recommended minimum for international applicants."
+        "summary": "TOEFL iBT minimum score of 100 required for international applicants."
       },
       "gre": {
         "status": "Not Required",
-        "summary": "GRE not required for many CS master's pathways."
+        "summary": "GRE is not required for MS in Computer Science."
       },
       "coursework": [
         "Programming",
@@ -73,15 +73,15 @@
       "program": "Technical master's preparation for computing careers and specialization depth",
       "sop": "Describe CS preparation, specialization interest, projects, and career direction.",
       "experience": ["Projects", "Internship"],
-      "funding": "Master's funding is limited; consider TA/RA after enrollment."
+      "funding": "Master's funding is limited; competitive GRA/GTA positions available after first semester."
     },
     "phd": {
       "research_fit": "N/A",
       "faculty_areas": []
     },
     "source": {
-      "url": "https://www.cc.gatech.edu/",
-      "retrieved_at": "2026-05-24",
+      "url": "https://www.cc.gatech.edu/ms-computer-science",
+      "retrieved_at": "2026-07-31",
       "confidence": "Sample"
     }
   },
@@ -99,11 +99,11 @@
         "required": true,
         "test": "TOEFL iBT",
         "minimum_score": 100,
-        "summary": "TOEFL iBT 100 or comparable IELTS; speaking subscores may matter."
+        "summary": "TOEFL iBT 100 or IELTS 7.5; subscore minimums of 25 in all sections recommended."
       },
       "gre": {
-        "status": "Optional",
-        "summary": "GRE optional; strong quantitative background expected."
+        "status": "Not Required",
+        "summary": "GRE is not required; quantitative preparation in math/CS is evaluated closely."
       },
       "coursework": [
         "Programming",
@@ -117,15 +117,15 @@
       "program": "Highly quantitative ML program with strong mathematical and research preparation",
       "sop": "Connect mathematical preparation, ML projects, and specific technical interests.",
       "experience": ["Projects", "Research"],
-      "funding": "Limited master's funding; research assistantships are selective."
+      "funding": "Master's students are self-funded or sponsored; limited course TA positions available."
     },
     "phd": {
       "research_fit": "N/A",
       "faculty_areas": []
     },
     "source": {
-      "url": "https://www.ml.cmu.edu/",
-      "retrieved_at": "2026-05-24",
+      "url": "https://www.ml.cmu.edu/academics/primary-ms-in-machine-learning.html",
+      "retrieved_at": "2026-07-31",
       "confidence": "Sample"
     }
   },
@@ -138,16 +138,16 @@
     "location": "Ann Arbor, MI",
     "country": "United States",
     "requirements": {
-      "deadline": "2026-12-01",
+      "deadline": "2026-12-15",
       "english": {
         "required": true,
         "test": "TOEFL iBT",
         "minimum_score": 84,
-        "summary": "TOEFL/IELTS required unless waiver applies."
+        "summary": "TOEFL iBT minimum 84 (Rackham requirement), though CSE competitive bar is 100+."
       },
       "gre": {
         "status": "Not Required",
-        "summary": "GRE not required."
+        "summary": "GRE general test is not required for CSE PhD applications."
       },
       "coursework": [
         "Programming",
@@ -160,15 +160,21 @@
       "program": "Research-intensive PhD; faculty alignment and prior research matter",
       "sop": "Describe research interests, preparation, potential advisors, and long-term goals.",
       "experience": ["Research", "Projects"],
-      "funding": "PhD students are generally funded through fellowships, TA, or RA support."
+      "funding": "All admitted PhD students receive full 5-year funding (tuition, monthly stipend, and healthcare)."
     },
     "phd": {
-      "research_fit": "AI, machine learning, data mining, systems, theory, HCI",
-      "faculty_areas": ["machine learning", "data mining", "optimization", "systems"]
+      "research_fit": "mathematical optimization, RandNLA, randomized algorithms, scientific computing, decision systems, machine learning, AI theory",
+      "faculty_areas": [
+        "mathematical optimization",
+        "RandNLA",
+        "scientific computing",
+        "decision systems",
+        "machine learning"
+      ]
     },
     "source": {
-      "url": "https://cse.engin.umich.edu/",
-      "retrieved_at": "2026-05-24",
+      "url": "https://cse.engin.umich.edu/academics/graduate/phd-program/",
+      "retrieved_at": "2026-07-31",
       "confidence": "Sample"
     }
   },
@@ -181,16 +187,16 @@
     "location": "New York, NY",
     "country": "United States",
     "requirements": {
-      "deadline": "2027-02-15",
+      "deadline": "2026-12-15",
       "english": {
         "required": true,
         "test": "TOEFL iBT",
         "minimum_score": 99,
-        "summary": "TOEFL/IELTS required for many international applicants."
+        "summary": "TOEFL iBT 99 minimum or IELTS 7.0 required; waiver applies to US degree holders."
       },
       "gre": {
-        "status": "Recommended",
-        "summary": "GRE recommended; quantitative score is important."
+        "status": "Optional",
+        "summary": "GRE optional; strong quantitative scores recommended to demonstrate mathematical readiness."
       },
       "coursework": [
         "Linear Algebra",
@@ -203,15 +209,15 @@
       "program": "Quantitative analytics, optimization, stochastic modeling, and decision systems",
       "sop": "Explain quantitative foundation, analytics goals, and preparation for OR coursework.",
       "experience": ["Projects", "Internship"],
-      "funding": "Master's funding limited; some fellowships may be available."
+      "funding": "Master's funding is limited; departmental merit scholarships and TA positions available."
     },
     "phd": {
       "research_fit": "N/A",
       "faculty_areas": []
     },
     "source": {
-      "url": "https://www.ieor.columbia.edu/",
-      "retrieved_at": "2026-05-24",
+      "url": "https://ieor.columbia.edu/masters/operations-research",
+      "retrieved_at": "2026-07-31",
       "confidence": "Sample"
     }
   },
@@ -224,16 +230,16 @@
     "location": "Stanford, CA",
     "country": "United States",
     "requirements": {
-      "deadline": "2026-12-03",
+      "deadline": "2026-12-01",
       "english": {
         "required": true,
         "test": "TOEFL iBT",
         "minimum_score": 100,
-        "summary": "TOEFL required for many international applicants; waiver rules apply."
+        "summary": "TOEFL iBT 100 minimum required; waiver granted for U.S. bachelor's degree."
       },
       "gre": {
         "status": "Not Required",
-        "summary": "GRE not required."
+        "summary": "GRE general and subject tests are not required."
       },
       "coursework": [
         "Linear Algebra",
@@ -246,15 +252,21 @@
       "program": "Research PhD in statistical theory, machine learning, probability, and data science",
       "sop": "Discuss research maturity, mathematical preparation, and faculty/topic fit.",
       "experience": ["Research", "Projects", "Publication"],
-      "funding": "PhD students typically receive funding packages through assistantships or fellowships."
+      "funding": "Full 5-year funding package covering tuition, stipend, and health insurance for all PhD students."
     },
     "phd": {
-      "research_fit": "statistical machine learning, probability, optimization, data science",
-      "faculty_areas": ["machine learning", "probability", "optimization", "data science"]
+      "research_fit": "mathematical optimization, RandNLA, scientific computing, decision systems, machine learning, statistical theory",
+      "faculty_areas": [
+        "mathematical optimization",
+        "RandNLA",
+        "scientific computing",
+        "decision systems",
+        "machine learning"
+      ]
     },
     "source": {
-      "url": "https://statistics.stanford.edu/",
-      "retrieved_at": "2026-05-24",
+      "url": "https://statistics.stanford.edu/academics/phd-program",
+      "retrieved_at": "2026-07-31",
       "confidence": "Sample"
     }
   },
@@ -272,11 +284,11 @@
         "required": true,
         "test": "TOEFL iBT",
         "minimum_score": 77,
-        "summary": "TOEFL/IELTS required unless exemption applies."
+        "summary": "TOEFL iBT required (min: Speaking 22, Reading 20, Listening 15, Writing 20); IELTS 7.0."
       },
       "gre": {
-        "status": "Optional",
-        "summary": "GRE optional; math preparation is central."
+        "status": "Not Required",
+        "summary": "GRE general and math subject tests are not required."
       },
       "coursework": [
         "Linear Algebra",
@@ -289,15 +301,21 @@
       "program": "Interdisciplinary applied math research across optimization, computation, and modeling",
       "sop": "Name mathematical interests, preparation, and potential research groups.",
       "experience": ["Research", "Projects", "Teaching/TA"],
-      "funding": "PhD support commonly includes TA/RA assignments and fellowships."
+      "funding": "Fully funded for 5 years through fellowships, teaching assistantships, and research assistantships."
     },
     "phd": {
-      "research_fit": "optimization, scientific computing, stochastic modeling, data science",
-      "faculty_areas": ["optimization", "machine learning", "stochastic modeling", "computation"]
+      "research_fit": "mathematical optimization, RandNLA, scientific computing, decision systems, machine learning, numerical analysis",
+      "faculty_areas": [
+        "mathematical optimization",
+        "RandNLA",
+        "scientific computing",
+        "decision systems",
+        "machine learning"
+      ]
     },
     "source": {
-      "url": "https://cam.cornell.edu/",
-      "retrieved_at": "2026-05-24",
+      "url": "https://www.cam.cornell.edu/cam/academics/graduate-study",
+      "retrieved_at": "2026-07-31",
       "confidence": "Sample"
     }
   },
@@ -310,16 +328,16 @@
     "location": "Berkeley, CA",
     "country": "United States",
     "requirements": {
-      "deadline": "2026-12-15",
+      "deadline": "2026-12-08",
       "english": {
         "required": true,
         "test": "TOEFL iBT",
         "minimum_score": 90,
-        "summary": "TOEFL/IELTS required for many international applicants."
+        "summary": "TOEFL iBT 90 or IELTS 7.0 required; waiver automatically applies for U.S. degree."
       },
       "gre": {
-        "status": "Optional",
-        "summary": "GRE optional; mathematical transcript reviewed closely."
+        "status": "Not Required",
+        "summary": "GRE general test is not required for MA application."
       },
       "coursework": [
         "Linear Algebra",
@@ -331,15 +349,114 @@
       "program": "Statistics master's with strong math, probability, and data analysis preparation",
       "sop": "Explain statistical preparation, programming skill, and goals in data/statistical work.",
       "experience": ["Projects"],
-      "funding": "Master's funding is limited."
+      "funding": "Master's funding is limited; student GSI/reader positions available upon matriculation."
     },
     "phd": {
       "research_fit": "N/A",
       "faculty_areas": []
     },
     "source": {
-      "url": "https://statistics.berkeley.edu/",
-      "retrieved_at": "2026-05-24",
+      "url": "https://statistics.berkeley.edu/academics/grad/ma",
+      "retrieved_at": "2026-07-31",
+      "confidence": "Sample"
+    }
+  },
+  {
+    "id": "umn-phd-cs",
+    "school": "University of Minnesota",
+    "program": "PhD in Computer Science",
+    "degree": "PhD",
+    "field": "Computer Science",
+    "location": "Minneapolis, MN",
+    "country": "United States",
+    "requirements": {
+      "deadline": "2026-12-15",
+      "english": {
+        "required": true,
+        "test": "TOEFL iBT",
+        "minimum_score": 79,
+        "summary": "TOEFL iBT 79 (writing 21, reading 19) or IELTS 6.5; U.S. degree waiver applies."
+      },
+      "gre": {
+        "status": "Not Required",
+        "summary": "GRE general test is not required for Computer Science PhD."
+      },
+      "coursework": [
+        "Programming",
+        "Algorithms",
+        "Linear Algebra",
+        "Optimization",
+        "Machine Learning"
+      ]
+    },
+    "preferences": {
+      "program": "Strong optimization, machine learning, RandNLA, and scientific computing research fit.",
+      "sop": "Detail prior optimization/RandNLA research, highlight faculty fit (e.g., Ju Sun).",
+      "experience": ["Research", "Projects", "Teaching/TA", "Publication"],
+      "funding": "Guaranteed full 5-year funding via TA, RA, or graduate fellowships."
+    },
+    "phd": {
+      "research_fit": "mathematical optimization, RandNLA, scientific computing, decision systems, machine learning, non-convex optimization",
+      "faculty_areas": [
+        "mathematical optimization",
+        "RandNLA",
+        "scientific computing",
+        "decision systems",
+        "machine learning"
+      ]
+    },
+    "source": {
+      "url": "https://cse.umn.edu/cs/graduate-program-overview",
+      "retrieved_at": "2026-07-31",
+      "confidence": "Sample"
+    }
+  },
+  {
+    "id": "gatech-phd-isye",
+    "school": "Georgia Tech",
+    "program": "PhD in Operations Research",
+    "degree": "PhD",
+    "field": "Operations Research",
+    "location": "Atlanta, GA",
+    "country": "United States",
+    "requirements": {
+      "deadline": "2026-12-15",
+      "english": {
+        "required": true,
+        "test": "TOEFL iBT",
+        "minimum_score": 100,
+        "summary": "TOEFL iBT 100 required for international applicants."
+      },
+      "gre": {
+        "status": "Optional",
+        "summary": "GRE optional for ISyE PhD applicants."
+      },
+      "coursework": [
+        "Linear Algebra",
+        "Optimization",
+        "Probability/Statistics",
+        "Algorithms"
+      ]
+    },
+    "preferences": {
+      "program": "Top-ranked Operations Research program focusing on mathematical optimization and decision systems.",
+      "sop": "Highlight mathematical maturity, optimization background, and decision systems research.",
+      "experience": ["Research", "Projects", "Publication"],
+      "funding": "All admitted PhD students receive full financial support (tuition waiver plus monthly stipend)."
+    },
+    "phd": {
+      "research_fit": "mathematical optimization, decision systems, scientific computing, machine learning",
+      "faculty_areas": [
+        "mathematical optimization",
+        "RandNLA",
+        "scientific computing",
+        "decision systems",
+        "machine learning"
+      ]
+    },
+    "source": {
+      "url": "https://www.isye.gatech.edu/academics/phd",
+      "retrieved_at": "2026-07-31",
       "confidence": "Sample"
     }
   }

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from io import BytesIO
-from pathlib import Path
 from zipfile import ZipFile
 
 from app import active_programs
@@ -74,11 +73,12 @@ def test_default_profile_contains_matching_narrative() -> None:
 
 
 def test_sidebar_css_has_high_contrast_widget_rules() -> None:
-    css = Path("app.py").read_text(encoding="utf-8")
+    from gradpath.ui.theme import CUSTOM_CSS
 
-    assert "section[data-testid=\"stSidebar\"] div[data-baseweb=\"select\"] div" in css
-    assert "section[data-testid=\"stSidebar\"] div.stButton > button" in css
-    assert "color: #f5f5f0" in css
+    assert 'section[data-testid="stSidebar"] div[data-baseweb="select"] div' in CUSTOM_CSS
+    assert 'section[data-testid="stSidebar"] div.stButton > button' in CUSTOM_CSS
+    assert "#0f172a" in CUSTOM_CSS
+
 
 
 def test_scoring_returns_explainable_fit() -> None:
