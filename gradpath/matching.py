@@ -103,6 +103,24 @@ SELECTIVE_SCHOOLS = {
     "ucla",
 }
 
+TOP_LOTTERY_SCHOOLS = {
+    "stanford",
+    "mit",
+    "massachusetts institute",
+    "harvard",
+    "princeton",
+    "berkeley",
+    "carnegie mellon",
+    "cmu",
+    "caltech",
+}
+
+
+def _is_top_lottery_school(program: dict[str, Any]) -> bool:
+    text = f"{program.get('school', '')} {program.get('program', '')}".lower()
+    return any(name in text for name in TOP_LOTTERY_SCHOOLS)
+
+
 
 @dataclass(frozen=True)
 class MatchResult:
@@ -596,6 +614,8 @@ def _score_practical_feasibility(
     program: dict[str, Any], profile: dict[str, Any], matching: dict[str, Any]
 ) -> int:
     score = 72
+    if _is_top_lottery_school(program):
+        score -= 15  # Penalty for top hyper-selective schools (Stanford, MIT, Harvard, Berkeley, CMU, etc.)
     reqs = program.get("requirements", {})
     gre = reqs.get("gre", {})
     gre_text = f"{gre.get('status', '')} {gre.get('summary', '')}".lower()
@@ -646,7 +666,7 @@ def _category_and_status(
         return "保底/Lower-risk PhD", "Active"
     if research_fit < 42 or (not concrete_pois and overall < 55):
         return "Demoted/archive", "Demoted/archive"
-    if _is_selective(program) or feasibility < 62 or (not concrete_pois and research_fit >= 55):
+    if _is_top_lottery_school(program) or _is_selective(program) or feasibility < 62 or (not concrete_pois and research_fit >= 55):
         return "衝刺", "Active"
     if overall >= 58:
         return "Moderate", "Active"
@@ -676,6 +696,8 @@ def _risk_note(
     concrete_pois: list[str],
 ) -> str:
     risks = list(matching.get("risk_factors", []))
+    if _is_top_lottery_school(program):
+        risks.append("Top hyper-selective lottery school (Stanford/MIT/Harvard/etc.); selectivity penalty applied")
     if not concrete_pois and program.get("degree") == "PhD":
         risks.append("POI names/capacity are not verified")
     if feasibility < 65:

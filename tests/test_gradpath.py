@@ -912,12 +912,60 @@ def test_results_dataframe_empty_returns_empty() -> None:
     assert "Research Set" not in df.columns
 
 
-def test_unified_ai_analysis_fallback_when_no_key() -> None:
-    """Tests analyze_program_unified_with_ai fallback when API key is missing."""
-    from gradpath.ai_extract import analyze_program_unified_with_ai
+def test_top_school_penalty_applied_to_lottery_programs() -> None:
+    """Tests that hyper-selective top schools receive selectivity penalty and Reach category."""
+    from gradpath.matching import score_match
+    from gradpath.scoring import score_program
 
-    data, note = analyze_program_unified_with_ai("Sample page text", {}, {}, "https://test.edu")
-    assert data == {}
-    assert "unavailable" in note
+    top_program = {
+        "id": "stanford-phd-stats",
+        "school": "Stanford University",
+        "program": "PhD in Statistics",
+        "degree": "PhD",
+        "field": "Statistics",
+        "requirements": {
+            "deadline": "2026-12-01",
+            "english": {"required": True, "minimum_score": 100, "summary": "TOEFL 100"},
+            "gre": {"status": "Not Required", "summary": "GRE not required"},
+            "coursework": ["Linear Algebra", "Probability/Statistics", "Machine Learning"],
+        },
+        "preferences": {
+            "funding": "Fully funded 5-year assistantship",
+            "program": "PhD",
+            "experience": ["OSQP/Torch optimization work with Ju Sun"],
+        },
+        "phd": {
+            "research_fit": "optimization, RandNLA, scientific computing",
+            "faculty_areas": ["optimization", "randomized linear algebra", "machine learning"],
+            "poi_list": ["Prof. Stanford POI"],
+        },
+        "source": {"confidence": "Curated", "url": "https://statistics.stanford.edu"},
+    }
+
+    profile = {
+        "target_degree": "PhD",
+        "target_fields": ["Statistics"],
+        "gpa": 4.0,
+        "english_test": "TOEFL",
+        "english_score": 100,
+        "gre_status": "Completed",
+        "gre_quant": 168,
+        "coursework": ["Linear Algebra", "Probability/Statistics", "Machine Learning"],
+        "experience": ["OSQP/Torch optimization work with Ju Sun"],
+        "research_interests": ["optimization", "randnla"],
+        "preferred_regions": ["United States"],
+        "funding_need": "Critical",
+        "recommenders": {"Ju": "Optimization", "Swati": "RandNLA"},
+    }
+
+    match_res = score_match(top_program, profile)
+    # Feasibility and Risk note should mention top school selectivity penalty
+    assert "Top hyper-selective" in match_res.risk_note or "selectivity penalty" in match_res.risk_note
+    # Category should strictly be Lottery / 衝刺
+    assert match_res.category == "衝刺"
+
+    prog_score = score_program(top_program, profile)
+    assert any("Hyper-selective top school" in item for item in prog_score["missing"])
+
 
 

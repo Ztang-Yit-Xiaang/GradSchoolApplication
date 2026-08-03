@@ -252,6 +252,12 @@ def _score_phd(
     score += deadline
     (strengths if deadline >= 8 else actions).append(deadline_note)
 
+    school_lower = f"{program.get('school', '')} {program.get('program', '')}".lower()
+    top_schools = ["stanford", "mit", "massachusetts institute", "harvard", "princeton", "berkeley", "carnegie mellon", "cmu", "caltech"]
+    if any(name in school_lower for name in top_schools):
+        score -= 10
+        missing.append("Hyper-selective top school (Stanford/MIT/Harvard/etc.): selectivity penalty applied")
+
     return score, strengths, missing, actions
 
 
